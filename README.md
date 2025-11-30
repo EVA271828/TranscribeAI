@@ -7,11 +7,14 @@
 ```
 PythonProject/
 ├── main.py                     # 主入口文件
+├── run_gui.py                  # GUI启动脚本
 ├── src/                        # 源代码目录
 │   ├── core/                   # 核心功能模块
 │   │   ├── audio_summarizer.py # 主程序逻辑
 │   │   ├── whisper_transcriber.py # Whisper语音识别
 │   │   └── deepseek_summarizer.py # DeepSeek API总结
+│   ├── gui/                    # 图形界面模块
+│   │   └── main_gui.py         # GUI主程序
 │   ├── utils/                  # 工具模块
 │   │   └── file_utils.py       # 文件操作工具
 │   └── config/                 # 配置模块
@@ -36,18 +39,32 @@ PythonProject/
 3. **多模型支持**: 支持Whisper的多种模型(tiny, base, small, medium, large)
 4. **多种模板**: 提供多种提示词模板，适应不同场景
 5. **配置管理**: 支持保存API密钥和默认设置
+6. **图形界面**: 提供友好的GUI界面，方便用户操作
 
 ## 使用方法
 
-### 基本使用
+### 图形界面模式（推荐）
 
 ```bash
-python main.py
+# 方法1：直接运行GUI脚本
+python run_gui.py
+
+# 方法2：通过主程序启动GUI
+python main.py --gui
 ```
 
-### 高级用法
+图形界面功能：
+- 可视化选择音频文件
+- 直观选择Whisper模型和总结模板
+- 实时显示转录和总结进度
+- 内置配置管理界面
+
+### 命令行模式
 
 ```bash
+# 基本使用
+python main.py
+
 # 指定模型
 python main.py --model tiny
 
