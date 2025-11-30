@@ -1,0 +1,1 @@
+F:\project\my-project\PythonProject\.venv\Scripts\python.exe F:\project\my-project\PythonProject\run_gui.py 
