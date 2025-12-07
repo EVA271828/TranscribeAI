@@ -5,7 +5,7 @@ class FileUtils:
     """文件操作工具类"""
     
     @staticmethod
-    def save_results(transcription, summary, audio_file):
+    def save_results(transcription, summary, audio_file, output_folder=None):
         """
         保存转录和总结结果到文件
         
@@ -13,6 +13,7 @@ class FileUtils:
             transcription (str): 语音识别的文本
             summary (str): AI生成的总结
             audio_file (str): 音频文件路径
+            output_folder (str, optional): 输出文件夹路径，默认为None（使用默认路径）
             
         Returns:
             tuple: (转录文件路径, 总结文件路径)
@@ -20,17 +21,25 @@ class FileUtils:
         # 获取项目根目录
         project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         
+        # 如果未指定输出文件夹，使用默认路径
+        if output_folder is None:
+            output_folder = os.path.join(project_root, 'output')
+        
+        # 如果输出文件夹是相对路径，则相对于项目根目录
+        if not os.path.isabs(output_folder):
+            output_folder = os.path.join(project_root, output_folder)
+        
         # 生成输出文件名
         audio_name = os.path.splitext(os.path.basename(audio_file))[0]
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
         # 转录文件路径和名称
-        transcript_dir = os.path.join(project_root, 'output', 'transcripts')
+        transcript_dir = os.path.join(output_folder, 'transcripts')
         os.makedirs(transcript_dir, exist_ok=True)
         transcript_file = os.path.join(transcript_dir, f"{audio_name}_转录_{timestamp}.txt")
         
         # 总结文件路径和名称
-        summary_dir = os.path.join(project_root, 'output', 'summaries')
+        summary_dir = os.path.join(output_folder, 'summaries')
         os.makedirs(summary_dir, exist_ok=True)
         summary_file = os.path.join(summary_dir, f"{audio_name}_总结_{timestamp}.md")
         

@@ -36,6 +36,7 @@ class AudioTranscriberGUI:
         self.model_var = tk.StringVar()
         self.api_key = tk.StringVar()
         self.template_var = tk.StringVar()
+        self.output_folder = tk.StringVar()
         self.transcription_result = tk.StringVar()
         self.summary_result = tk.StringVar()
         
@@ -134,6 +135,13 @@ class AudioTranscriberGUI:
         
         template_info = ttk.Label(template_frame, text="选择适合您内容的模板", foreground="gray")
         template_info.pack(side=tk.LEFT, padx=(10, 0))
+        
+        # 输出文件夹选择
+        output_frame = ttk.LabelFrame(parent, text="输出文件夹", padding="10")
+        output_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Entry(output_frame, textvariable=self.output_folder, width=70).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+        ttk.Button(output_frame, text="浏览...", command=self.browse_output_folder).pack(side=tk.RIGHT)
     
     def setup_results_tab(self, parent):
         """结果选项卡"""
@@ -169,6 +177,12 @@ class AudioTranscriberGUI:
         
         if filename:
             self.audio_file.set(filename)
+    
+    def browse_output_folder(self):
+        """浏览选择输出文件夹"""
+        folder = filedialog.askdirectory(title="选择输出文件夹")
+        if folder:
+            self.output_folder.set(folder)
     
     def toggle_api_visibility(self):
         """切换API密钥可见性"""
@@ -239,6 +253,28 @@ class AudioTranscriberGUI:
                 value=template
             ).pack(anchor=tk.W, padx=20, pady=5)
         
+        # 输出文件夹配置
+        output_tab = ttk.Frame(notebook)
+        notebook.add(output_tab, text="输出文件夹")
+        
+        ttk.Label(output_tab, text="选择默认输出文件夹:").pack(anchor=tk.W, padx=10, pady=(10, 0))
+        
+        output_var = tk.StringVar()
+        output_var.set(self.config.get_output_folder() or "output")
+        
+        output_frame = ttk.Frame(output_tab)
+        output_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        output_entry = ttk.Entry(output_frame, textvariable=output_var, width=50)
+        output_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+        
+        def browse_output():
+            folder = filedialog.askdirectory(title="选择输出文件夹")
+            if folder:
+                output_var.set(folder)
+        
+        ttk.Button(output_frame, text="浏览...", command=browse_output).pack(side=tk.RIGHT)
+        
         # 按钮区域
         button_frame = ttk.Frame(config_window)
         button_frame.pack(fill=tk.X, padx=10, pady=10)
@@ -247,6 +283,7 @@ class AudioTranscriberGUI:
             self.config.set_api_key(api_entry.get())
             self.config.set_default_model(model_var.get())
             self.config.set_default_template(template_var.get())
+            self.config.set_output_folder(output_var.get())
             self.load_config()
             messagebox.showinfo("成功", "配置已保存")
             config_window.destroy()
@@ -267,6 +304,10 @@ class AudioTranscriberGUI:
         default_template = self.config.get_default_template()
         if default_template:
             self.template_var.set(default_template)
+        
+        output_folder = self.config.get_output_folder()
+        if output_folder:
+            self.output_folder.set(output_folder)
     
     def start_transcription(self):
         """开始转录"""
@@ -346,7 +387,11 @@ class AudioTranscriberGUI:
             return
         
         try:
-            transcript_file, summary_file = FileUtils.save_results(transcription, summary, self.audio_file.get())
+            # 使用用户选择的输出文件夹，如果没有则使用配置中的默认值
+            output_folder = self.output_folder.get() or self.config.get_output_folder()
+            transcript_file, summary_file = FileUtils.save_results(
+                transcription, summary, self.audio_file.get(), output_folder
+            )
             messagebox.showinfo("成功", f"结果已保存:\n转录: {transcript_file}\n总结: {summary_file}")
             self.status_var.set("结果已保存")
         except Exception as e:

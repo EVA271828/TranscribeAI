@@ -35,7 +35,8 @@ class ConfigManager:
         }
         self.config['settings'] = {
             'default_model': 'small',
-            'default_template': 'audio_content_analysis'
+            'default_template': 'audio_content_analysis',
+            'output_folder': 'output'
         }
         self.save_config()
     
@@ -97,6 +98,29 @@ class ConfigManager:
             template (str): 模板名称
         """
         self.config.set('settings', 'default_template', template)
+        self.save_config()
+    
+    def get_output_folder(self):
+        """
+        获取输出文件夹
+        
+        Returns:
+            str: 输出文件夹路径
+        """
+        try:
+            return self.config.get('settings', 'output_folder')
+        except (configparser.NoOptionError, configparser.NoSectionError):
+            # 如果配置文件中没有output_folder选项，则返回默认值
+            return 'output'
+    
+    def set_output_folder(self, folder):
+        """
+        设置输出文件夹
+        
+        Args:
+            folder (str): 输出文件夹路径
+        """
+        self.config.set('settings', 'output_folder', folder)
         self.save_config()
     
     def save_config(self):

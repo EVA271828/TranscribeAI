@@ -10,7 +10,7 @@ from src.core.deepseek_summarizer import DeepSeekSummarizer
 from src.utils.file_utils import FileUtils
 from src.config.config_manager import ConfigManager
 
-def main():
+def main(output_folder=None):
     """主程序"""
     # 初始化配置管理器
     config = ConfigManager()
@@ -39,6 +39,8 @@ def main():
                         help='使用的提示词模板名称（不含扩展名），默认为audio_content_analysis')
     parser.add_argument('--prompts_dir', type=str, default='prompts',
                         help='提示词模板目录，默认为prompts')
+    parser.add_argument('--output', type=str,
+                        help='指定输出文件夹路径')
     parser.add_argument('--config', action='store_true',
                         help='进入配置模式，设置API密钥和默认选项')
     args = parser.parse_args()
@@ -121,7 +123,14 @@ def main():
         
         # 步骤3: 保存结果
         print("\n=== 保存结果 ===")
-        transcript_file, summary_file = FileUtils.save_results(transcription, summary, audio_file)
+        
+        # 确定输出文件夹
+        final_output_folder = args.output if args.output else output_folder
+        if not final_output_folder:
+            # 如果命令行和函数参数都没有提供，则使用配置中的默认值
+            final_output_folder = config.get_output_folder()
+        
+        transcript_file, summary_file = FileUtils.save_results(transcription, summary, audio_file, final_output_folder)
         
         print("\n处理完成！")
         print(f"转录文本长度: {len(transcription)}字符")
@@ -138,11 +147,12 @@ def enter_config_mode(config):
     print("1. 设置API密钥")
     print("2. 设置默认模型")
     print("3. 设置默认模板")
-    print("4. 查看当前配置")
-    print("5. 退出配置模式")
+    print("4. 设置默认输出文件夹")
+    print("5. 查看当前配置")
+    print("6. 退出配置模式")
     
     while True:
-        choice = input("\n请选择操作 (1-5): ").strip()
+        choice = input("\n请选择操作 (1-6): ").strip()
         
         if choice == '1':
             # 设置API密钥
@@ -200,6 +210,15 @@ def enter_config_mode(config):
                 print("无效选择。")
         
         elif choice == '4':
+            # 设置默认输出文件夹
+            current_output = config.get_output_folder()
+            print(f"\n当前默认输出文件夹: {current_output}")
+            new_output = input("请输入新的默认输出文件夹路径 (留空保持不变): ").strip()
+            if new_output:
+                config.set_output_folder(new_output)
+                print(f"默认输出文件夹已设置为: {new_output}")
+        
+        elif choice == '5':
             # 查看当前配置
             api_key = config.get_api_key()
             if api_key:
@@ -210,8 +229,9 @@ def enter_config_mode(config):
             
             print(f"默认模型: {config.get_default_model()}")
             print(f"默认模板: {config.get_default_template()}")
+            print(f"默认输出文件夹: {config.get_output_folder()}")
         
-        elif choice == '5':
+        elif choice == '6':
             # 退出配置模式
             print("退出配置模式。")
             break
