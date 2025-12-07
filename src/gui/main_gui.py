@@ -344,9 +344,17 @@ class AudioTranscriberGUI:
             # 初始化转录器
             self.transcriber = WhisperTranscriber(self.model_var.get())
             
-            # 转录音频
-            self.root.after(0, lambda: self.status_var.set("正在转录音频..."))
-            transcription = self.transcriber.transcribe(self.audio_file.get())
+            # 定义进度回调函数
+            def progress_callback(progress):
+                # 更新状态栏显示进度
+                self.root.after(0, lambda: self.status_var.set(f"正在转录音频... {progress:.1f}%"))
+            
+            # 转录音频（带进度回调）
+            self.root.after(0, lambda: self.status_var.set("正在转录音频... 0%"))
+            transcription = self.transcriber.transcribe(
+                self.audio_file.get(), 
+                progress_callback=progress_callback
+            )
             
             # 显示转录结果
             self.root.after(0, lambda: self.transcription_text.insert(tk.END, transcription))

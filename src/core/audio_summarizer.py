@@ -115,7 +115,23 @@ def main(output_folder=None):
     try:
         # 步骤1: 语音识别
         print("\n=== 开始语音识别 ===")
-        transcription = transcriber.transcribe(audio_file)
+        
+        # 定义进度回调函数
+        def progress_callback(progress):
+            # 创建一个简单的进度条
+            bar_length = 50
+            filled_length = int(round(bar_length * progress / 100))
+            bar = '█' * filled_length + '-' * (bar_length - filled_length)
+            
+            # 使用回车符覆盖当前行，实现进度条更新效果
+            print(f'\r进度: |{bar}| {progress:.1f}% ', end='', flush=True)
+            
+            # 如果完成，打印换行
+            if progress >= 100:
+                print()
+        
+        # 使用进度回调进行转录
+        transcription = transcriber.transcribe(audio_file, progress_callback=progress_callback)
         
         # 步骤2: 内容总结
         print("\n=== 开始内容总结 ===")

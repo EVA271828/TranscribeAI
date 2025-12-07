@@ -2,6 +2,7 @@ import whisper
 import torch
 import time
 import os
+import librosa
 
 class WhisperTranscriber:
     """Whisper语音识别类"""
@@ -27,13 +28,15 @@ class WhisperTranscriber:
             print(f"模型加载耗时: {time.time() - start_time:.2f}秒")
         return self.model
     
-    def transcribe(self, audio_file, language="zh"):
+    def transcribe(self, audio_file, language="zh", verbose=True, progress_callback=None):
         """
         转录音频文件
         
         Args:
             audio_file (str): 音频文件路径
             language (str): 语言代码，默认为中文(zh)
+            verbose (bool): 是否显示详细进度信息，默认为True
+            progress_callback (callable): 进度回调函数，接收当前进度百分比作为参数
             
         Returns:
             str: 转录的文本
@@ -46,16 +49,80 @@ class WhisperTranscriber:
         print(f"正在处理音频文件: {audio_file}")
         start_time = time.time()
         
-        result = model.transcribe(
-            audio_file,
-            language=language,
-            task="transcribe",
-            fp16=torch.cuda.is_available(),
-            initial_prompt="以下是简体中文："
-        )
+        # 如果提供了进度回调函数，则使用自定义的verbose函数
+        if progress_callback is not None and callable(progress_callback):
+            # 获取音频时长
+            try:
+                audio_duration = librosa.get_duration(path=audio_file)
+                print(f"音频时长: {audio_duration:.2f}秒")
+            except Exception as e:
+                print(f"无法获取音频时长: {e}")
+                audio_duration = None
+            
+            # 保存原始的print函数
+            original_print = print
+            
+            def custom_print(*args, **kwargs):
+                # 调用原始print函数以保持控制台输出
+                original_print(*args, **kwargs)
+                
+                # 尝试从输出中提取进度信息
+                if len(args) > 0 and isinstance(args[0], str):
+                    text = args[0]
+                    # Whisper的verbose输出格式通常是 "[00:00.000 --> 00:10.000] 文本内容"
+                    if "-->" in text and "[" in text and "]" in text:
+                        try:
+                            # 提取时间戳
+                            time_part = text.split("]")[0].split("[")[1]
+                            end_time = time_part.split(" --> ")[1]
+                            # 将时间戳转换为秒
+                            minutes, seconds = end_time.split(":")
+                            total_seconds = int(minutes) * 60 + float(seconds)
+                            
+                            # 计算进度百分比
+                            if audio_duration is not None:
+                                progress = min(95, int(total_seconds * 100 / audio_duration))
+                            else:
+                                # 如果无法获取音频时长，使用默认估计
+                                progress = min(95, int(total_seconds * 100 / 3600))  # 假设最大1小时
+                            
+                            progress_callback(progress)
+                        except:
+                            pass
+            
+            # 临时替换print函数
+            import builtins
+            builtins.print = custom_print
+            
+            try:
+                result = model.transcribe(
+                    audio_file,
+                    language=language,
+                    task="transcribe",
+                    fp16=torch.cuda.is_available(),
+                    initial_prompt="以下是简体中文：",
+                    verbose=verbose
+                )
+            finally:
+                # 恢复原始print函数
+                builtins.print = original_print
+        else:
+            # 没有提供进度回调，使用标准方式
+            result = model.transcribe(
+                audio_file,
+                language=language,
+                task="transcribe",
+                fp16=torch.cuda.is_available(),
+                initial_prompt="以下是简体中文：",
+                verbose=verbose
+            )
         
         print(f"转录耗时: {time.time() - start_time:.2f}秒")
         print(f"转录完成，文本长度: {len(result['text'])}字符")
+        
+        # 如果提供了进度回调，通知完成
+        if progress_callback is not None and callable(progress_callback):
+            progress_callback(100)
         
         if "duration" in result:
             print(f"音频时长: {result['duration']:.2f}秒")
