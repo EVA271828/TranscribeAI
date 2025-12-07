@@ -6,9 +6,11 @@
 import os
 import sys
 import threading
+import queue
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 from tkinter.font import Font
+from datetime import datetime
 
 # 添加项目根目录到Python路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -51,6 +53,13 @@ class AudioTranscriberGUI:
         self.current_file_index = 0
         self.file_progress = {}
         
+        # 线程和队列管理
+        self.transcription_queue = queue.Queue()
+        self.summary_queue = queue.Queue()
+        self.transcription_thread = None
+        self.summary_thread = None
+        self.stop_threads = False
+        
         # 设置界面
         self.setup_ui()
         self.load_config()
@@ -91,6 +100,9 @@ class AudioTranscriberGUI:
         self.start_button = ttk.Button(button_frame, text="开始转录", command=self.start_transcription)
         self.start_button.pack(side=tk.LEFT, padx=(0, 10))
         
+        self.stop_button = ttk.Button(button_frame, text="停止", command=self.stop_transcription, state=tk.DISABLED)
+        self.stop_button.pack(side=tk.LEFT, padx=(0, 10))
+        
         self.save_button = ttk.Button(button_frame, text="保存结果", command=self.save_results, state=tk.DISABLED)
         self.save_button.pack(side=tk.LEFT)
         
@@ -121,20 +133,24 @@ class AudioTranscriberGUI:
         self.list_frame = ttk.LabelFrame(parent, text="文件列表", padding="10")
         
         # 创建Treeview显示文件列表和进度
-        columns = ("文件名", "状态", "进度")
+        columns = ("文件名", "转录状态", "转录进度", "总结状态", "总结进度")
         self.file_tree = ttk.Treeview(self.list_frame, columns=columns, show="tree headings", height=8)
         
         # 设置列标题
         self.file_tree.heading("#0", text="")
         self.file_tree.heading("文件名", text="文件名")
-        self.file_tree.heading("状态", text="状态")
-        self.file_tree.heading("进度", text="进度")
+        self.file_tree.heading("转录状态", text="转录状态")
+        self.file_tree.heading("转录进度", text="转录进度")
+        self.file_tree.heading("总结状态", text="总结状态")
+        self.file_tree.heading("总结进度", text="总结进度")
         
         # 设置列宽
         self.file_tree.column("#0", width=0, stretch=False)
-        self.file_tree.column("文件名", width=300, minwidth=200)
-        self.file_tree.column("状态", width=100, minwidth=80)
-        self.file_tree.column("进度", width=100, minwidth=80)
+        self.file_tree.column("文件名", width=250, minwidth=200)
+        self.file_tree.column("转录状态", width=80, minwidth=60)
+        self.file_tree.column("转录进度", width=80, minwidth=60)
+        self.file_tree.column("总结状态", width=80, minwidth=60)
+        self.file_tree.column("总结进度", width=80, minwidth=60)
         
         # 添加滚动条
         scrollbar = ttk.Scrollbar(self.list_frame, orient="vertical", command=self.file_tree.yview)
@@ -232,6 +248,100 @@ class AudioTranscriberGUI:
             
             if filename:
                 self.audio_file.set(filename)
+                # 检查断点续传状态
+                self.check_single_file_resume_status(filename)
+    
+    def check_single_file_resume_status(self, audio_file):
+        """检查单个文件的断点续传状态"""
+        # 获取输出文件夹
+        output_folder = self.output_folder.get() or self.config_manager.get_output_folder()
+        transcript_dir = os.path.join(output_folder, 'transcripts')
+        summary_dir = os.path.join(output_folder, 'summaries')
+        
+        # 获取文件基本信息
+        base_name = os.path.splitext(os.path.basename(audio_file))[0]
+        trans_status = '等待'
+        trans_progress = '0%'
+        sum_status = '等待'
+        sum_progress = '0%'
+        
+        # 检查转录文件
+        if os.path.exists(transcript_dir):
+            for trans_filename in os.listdir(transcript_dir):
+                if trans_filename.startswith(f"{base_name}_转录_") and trans_filename.endswith(".txt"):
+                    trans_status = '转录完成(已存在)'
+                    trans_progress = '100%'
+                    break
+        
+        # 检查总结文件
+        if os.path.exists(summary_dir):
+            for sum_filename in os.listdir(summary_dir):
+                if sum_filename.startswith(f"{base_name}_总结_") and sum_filename.endswith(".txt"):
+                    sum_status = '总结完成(已存在)'
+                    sum_progress = '100%'
+                    break
+        
+        # 更新状态显示
+        status_text = f"文件状态: 转录{trans_status}, 总结{sum_status}"
+        self.status_var.set(status_text)
+        
+        # 如果转录和总结都已完成，提示用户
+        if trans_progress == '100%' and sum_progress == '100%':
+            # 尝试加载已存在的文件
+            self.load_existing_files(audio_file, base_name, transcript_dir, summary_dir)
+    
+    def load_existing_files(self, audio_file, base_name, transcript_dir, summary_dir):
+        """加载已存在的转录和总结文件"""
+        transcription = None
+        summary = None
+        transcript_file = None
+        
+        # 查找并加载转录文件
+        if os.path.exists(transcript_dir):
+            for trans_filename in os.listdir(transcript_dir):
+                if trans_filename.startswith(f"{base_name}_转录_") and trans_filename.endswith(".txt"):
+                    potential_file = os.path.join(transcript_dir, trans_filename)
+                    try:
+                        with open(potential_file, 'r', encoding='utf-8') as f:
+                            content = f.read().strip()
+                        if content:
+                            transcription = content
+                            transcript_file = potential_file
+                            break
+                    except Exception:
+                        continue
+        
+        # 查找并加载总结文件
+        if os.path.exists(summary_dir):
+            for sum_filename in os.listdir(summary_dir):
+                if sum_filename.startswith(f"{base_name}_总结_") and sum_filename.endswith(".txt"):
+                    potential_file = os.path.join(summary_dir, sum_filename)
+                    try:
+                        with open(potential_file, 'r', encoding='utf-8') as f:
+                            content = f.read().strip()
+                        if content:
+                            summary = content
+                            break
+                    except Exception:
+                        continue
+        
+        # 显示加载的内容
+        if transcription:
+            self.transcription_text.delete(1.0, tk.END)
+            self.transcription_text.insert(tk.END, transcription)
+        
+        if summary:
+            self.summary_text.delete(1.0, tk.END)
+            self.summary_text.insert(tk.END, summary)
+        
+        # 更新状态
+        status = "已加载现有文件"
+        if transcript_file:
+            status += f" | 转录文件: {os.path.basename(transcript_file)}"
+        self.status_var.set(status)
+        
+        # 启用保存按钮
+        self.save_button.config(state=tk.NORMAL)
     
     def scan_audio_files(self):
         """扫描文件夹中的音频文件"""
@@ -249,15 +359,50 @@ class AudioTranscriberGUI:
         # 支持的音频文件扩展名
         audio_extensions = ['.mp3', '.wav', '.m4a', '.flac', '.ogg']
         
+        # 获取输出文件夹
+        output_folder = self.output_folder.get() or self.config_manager.get_output_folder()
+        transcript_dir = os.path.join(output_folder, 'transcripts')
+        summary_dir = os.path.join(output_folder, 'summaries')
+        
         # 扫描文件夹中的音频文件
         for filename in os.listdir(folder):
             if any(filename.lower().endswith(ext) for ext in audio_extensions):
                 file_path = os.path.join(folder, filename)
                 self.audio_files.append(file_path)
-                self.file_progress[file_path] = {'status': '等待', 'progress': 0}
+                
+                # 检查转录和总结文件是否已存在
+                base_name = os.path.splitext(filename)[0]
+                trans_status = '等待'
+                trans_progress = '0%'
+                sum_status = '等待'
+                sum_progress = '0%'
+                
+                # 检查转录文件
+                if os.path.exists(transcript_dir):
+                    for trans_filename in os.listdir(transcript_dir):
+                        if trans_filename.startswith(f"{base_name}_转录_") and trans_filename.endswith(".txt"):
+                            trans_status = '转录完成(已存在)'
+                            trans_progress = '100%'
+                            break
+                
+                # 检查总结文件
+                if os.path.exists(summary_dir):
+                    for sum_filename in os.listdir(summary_dir):
+                        if sum_filename.startswith(f"{base_name}_总结_") and sum_filename.endswith(".txt"):
+                            sum_status = '总结完成(已存在)'
+                            sum_progress = '100%'
+                            break
+                
+                # 添加到进度字典
+                self.file_progress[file_path] = {
+                    'trans_status': trans_status,
+                    'trans_progress': int(trans_progress.rstrip('%')),
+                    'sum_status': sum_status,
+                    'sum_progress': int(sum_progress.rstrip('%'))
+                }
                 
                 # 添加到树形视图
-                self.file_tree.insert('', 'end', values=(filename, '等待', '0%'))
+                self.file_tree.insert('', 'end', values=(filename, trans_status, trans_progress, sum_status, sum_progress))
         
         if not self.audio_files:
             messagebox.showinfo("提示", "所选文件夹中没有找到音频文件")
@@ -285,18 +430,38 @@ class AudioTranscriberGUI:
             
             # 隐藏文件列表
             self.list_frame.pack_forget()
+            
+            # 检查当前选择的文件是否存在断点续传的可能
+            current_file = self.audio_file.get()
+            if current_file and os.path.exists(current_file):
+                self.check_single_file_resume_status(current_file)
     
-    def update_file_progress(self, file_path, status, progress):
-        """更新文件处理进度"""
+    def update_file_progress(self, file_path, status, progress, stage="transcription"):
+        """更新文件处理进度
+        stage: "transcription" 或 "summary"
+        """
         if file_path in self.file_progress:
-            self.file_progress[file_path]['status'] = status
-            self.file_progress[file_path]['progress'] = progress
+            # 更新进度字典
+            if stage == "transcription":
+                self.file_progress[file_path]['trans_status'] = status
+                self.file_progress[file_path]['trans_progress'] = progress
+            else:  # summary
+                self.file_progress[file_path]['sum_status'] = status
+                self.file_progress[file_path]['sum_progress'] = progress
             
             # 更新树形视图中的显示
             for item in self.file_tree.get_children():
                 values = self.file_tree.item(item, 'values')
                 if values and values[0] == os.path.basename(file_path):
-                    self.file_tree.item(item, values=(values[0], status, f"{progress}%"))
+                    # 获取当前值
+                    filename = values[0]
+                    trans_status = values[1] if stage == "summary" else status
+                    trans_progress = values[2] if stage == "summary" else f"{progress}%"
+                    sum_status = values[3] if stage == "transcription" else status
+                    sum_progress = values[4] if stage == "transcription" else f"{progress}%"
+                    
+                    # 更新整行
+                    self.file_tree.item(item, values=(filename, trans_status, trans_progress, sum_status, sum_progress))
                     break
     
     def browse_output_folder(self):
@@ -464,16 +629,19 @@ class AudioTranscriberGUI:
         
         # 禁用按钮
         self.start_button.config(state=tk.DISABLED)
+        self.stop_button.config(state=tk.NORMAL)
         self.save_button.config(state=tk.DISABLED)
         
-        # 清空结果
-        self.transcription_text.delete(1.0, tk.END)
-        self.summary_text.delete(1.0, tk.END)
+        # 在文件夹模式下清空结果，单文件模式下不清空（支持断点续传）
+        if self.is_folder_mode.get():
+            self.transcription_text.delete(1.0, tk.END)
+            self.summary_text.delete(1.0, tk.END)
         
         # 重置进度
         if self.is_folder_mode.get():
             for file_path in self.audio_files:
-                self.update_file_progress(file_path, '等待', 0)
+                self.update_file_progress(file_path, '等待', 0, "transcription")
+                self.update_file_progress(file_path, '等待', 0, "summary")
         
         # 更新状态
         self.status_var.set("正在初始化模型...")
@@ -482,113 +650,301 @@ class AudioTranscriberGUI:
         threading.Thread(target=self.transcribe_and_summarize, daemon=True).start()
     
     def transcribe_and_summarize(self):
-        """转录和总结"""
+        """转录和总结 - 使用双线程处理"""
         try:
-            # 初始化转录器
-            self.transcriber = WhisperTranscriber(self.model_var.get())
+            # 重置停止标志
+            self.stop_threads = False
             
-            # 初始化总结器
+            # 清空队列
+            while not self.transcription_queue.empty():
+                self.transcription_queue.get()
+            while not self.summary_queue.empty():
+                self.summary_queue.get()
+            
+            # 初始化转录器和总结器
+            self.transcriber = WhisperTranscriber(self.model_var.get())
             self.summarizer = DeepSeekSummarizer(self.api_key.get(), "prompts")
             
             # 根据模式选择处理方式
             if self.is_folder_mode.get():
                 # 文件夹模式 - 批量处理
-                self.process_batch_files()
+                for audio_file in self.audio_files:
+                    self.transcription_queue.put(audio_file)
             else:
                 # 单文件模式
-                self.process_single_file(self.audio_file.get())
+                self.transcription_queue.put(self.audio_file.get())
             
-            # 更新状态
-            self.root.after(0, lambda: self.status_var.set("转录完成"))
+            # 启动转录线程（CPU密集型）
+            self.transcription_thread = threading.Thread(target=self.transcription_worker, daemon=True)
+            self.transcription_thread.start()
             
-            # 启用保存按钮
-            self.root.after(0, lambda: self.save_button.config(state=tk.NORMAL))
+            # 启动总结线程（I/O密集型）
+            self.summary_thread = threading.Thread(target=self.summary_worker, daemon=True)
+            self.summary_thread.start()
+            
+            # 监控线程状态
+            self.monitor_threads()
             
         except Exception as e:
             error_msg = f"处理过程中发生错误: {str(e)}"
             self.root.after(0, lambda: messagebox.showerror("错误", error_msg))
             self.root.after(0, lambda: self.status_var.set("错误"))
-        
-        finally:
-            # 启用开始按钮
             self.root.after(0, lambda: self.start_button.config(state=tk.NORMAL))
     
-    def process_single_file(self, audio_file):
-        """处理单个音频文件"""
-        # 定义进度回调函数
-        def progress_callback(progress):
-            # 更新状态栏显示进度
-            self.root.after(0, lambda: self.status_var.set(f"正在转录音频... {progress:.1f}%"))
-        
-        # 转录音频（带进度回调）
-        self.root.after(0, lambda: self.status_var.set("正在转录音频... 0%"))
-        transcription = self.transcriber.transcribe(
-            audio_file, 
-            progress_callback=progress_callback
-        )
-        
-        # 显示转录结果
-        self.root.after(0, lambda: self.transcription_text.insert(tk.END, transcription))
-        
-        # 总结内容
-        self.root.after(0, lambda: self.status_var.set("正在生成总结..."))
-        audio_title = FileUtils.get_audio_title(audio_file)
-        summary = self.summarizer.summarize(transcription, audio_title, self.template_var.get())
-        
-        # 显示总结结果
-        self.root.after(0, lambda: self.summary_text.insert(tk.END, summary))
-    
-    def process_batch_files(self):
-        """批量处理文件夹中的音频文件"""
-        total_files = len(self.audio_files)
-        self.current_file_index = 0
-        
-        # 处理每个文件
-        for i, audio_file in enumerate(self.audio_files):
-            self.current_file_index = i
-            
-            # 更新当前文件状态
-            self.root.after(0, lambda f=audio_file: self.update_file_progress(f, '转录中', 0))
-            self.root.after(0, lambda i=i, total=total_files: self.status_var.set(f"正在处理文件 {i+1}/{total_files}"))
-            
+    def transcription_worker(self):
+        """转录工作线程 - 处理CPU密集型任务"""
+        while not self.stop_threads and not self.transcription_queue.empty():
             try:
-                # 定义进度回调函数
-                def progress_callback(progress):
-                    # 更新文件进度
-                    self.root.after(0, lambda f=audio_file, p=progress: self.update_file_progress(f, '转录中', p))
+                # 从队列获取文件
+                audio_file = self.transcription_queue.get(timeout=1)
                 
-                # 转录音频
-                transcription = self.transcriber.transcribe(
-                    audio_file, 
-                    progress_callback=progress_callback
-                )
+                # 检查转录文件是否已存在
+                output_folder = self.output_folder.get() or self.config_manager.get_output_folder()
+                base_name = os.path.splitext(os.path.basename(audio_file))[0]
                 
-                # 更新状态为总结中
-                self.root.after(0, lambda f=audio_file: self.update_file_progress(f, '总结中', 95))
+                # 查找最新的转录文件
+                transcript_dir = os.path.join(output_folder, 'transcripts')
+                transcript_file = None
+                transcription = None
                 
-                # 总结内容
-                audio_title = FileUtils.get_audio_title(audio_file)
-                summary = self.summarizer.summarize(transcription, audio_title, self.template_var.get())
+                if os.path.exists(transcript_dir):
+                    # 查找匹配的转录文件
+                    for filename in os.listdir(transcript_dir):
+                        if filename.startswith(f"{base_name}_转录_") and filename.endswith(".txt"):
+                            potential_file = os.path.join(transcript_dir, filename)
+                            # 如果找到了文件，读取其内容
+                            try:
+                                with open(potential_file, 'r', encoding='utf-8') as f:
+                                    transcription = f.read().strip()
+                                if transcription:  # 确保文件不为空
+                                    transcript_file = potential_file
+                                    break
+                            except Exception:
+                                continue
                 
-                # 保存结果
-                output_folder = self.output_folder.get() or self.config.get_output_folder()
-                transcript_file, summary_file = FileUtils.save_results(
-                    transcription, summary, audio_file, output_folder
-                )
+                if transcript_file and transcription:
+                    # 转录文件已存在，跳过转录步骤
+                    self.root.after(0, self.update_file_progress, audio_file, '转录完成(已存在)', 100, "transcription")
+                    
+                    # 将结果放入总结队列
+                    self.summary_queue.put({
+                        'audio_file': audio_file,
+                        'transcription': transcription,
+                        'transcript_file': transcript_file
+                    })
+                else:
+                    # 需要进行转录
+                    # 更新状态
+                    self.root.after(0, self.update_file_progress, audio_file, '转录中', 0, "transcription")
+                    
+                    # 定义进度回调函数
+                    def progress_callback(progress):
+                        # 更新文件进度
+                        self.root.after(0, self.update_file_progress, audio_file, '转录中', progress, "transcription")
+                    
+                    # 转录音频
+                    transcription = self.transcriber.transcribe(
+                        audio_file, 
+                        progress_callback=progress_callback
+                    )
+                    
+                    # 立即保存转录文件
+                    os.makedirs(transcript_dir, exist_ok=True)
+                    
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    transcript_file = os.path.join(transcript_dir, f"{base_name}_转录_{timestamp}.txt")
+                    
+                    # 保存转录文本
+                    with open(transcript_file, 'w', encoding='utf-8') as f:
+                        f.write(transcription)
+                    
+                    # 更新状态为转录完成
+                    self.root.after(0, self.update_file_progress, audio_file, '转录完成', 100, "transcription")
+                    
+                    # 将结果放入总结队列
+                    self.summary_queue.put({
+                        'audio_file': audio_file,
+                        'transcription': transcription,
+                        'transcript_file': transcript_file  # 传递转录文件路径
+                    })
                 
-                # 更新状态为完成
-                self.root.after(0, lambda f=audio_file: self.update_file_progress(f, '完成', 100))
-                
-                # 在结果选项卡中显示最后一个文件的结果
-                if i == total_files - 1:
-                    self.root.after(0, lambda: self.transcription_text.insert(tk.END, f"文件: {os.path.basename(audio_file)}\n{transcription}\n\n"))
-                    self.root.after(0, lambda: self.summary_text.insert(tk.END, f"文件: {os.path.basename(audio_file)}\n{summary}\n\n"))
-                
+            except queue.Empty:
+                continue
             except Exception as e:
                 # 更新状态为错误
-                self.root.after(0, lambda f=audio_file: self.update_file_progress(f, f'错误: {str(e)}', 0))
-                print(f"处理文件 {audio_file} 时出错: {str(e)}")
+                self.root.after(0, self.update_file_progress, audio_file, f'错误: {str(e)}', 0, "transcription")
+                print(f"转录文件 {audio_file} 时出错: {str(e)}")
+    
+    def summary_worker(self):
+        """总结工作线程 - 处理I/O密集型任务"""
+        while not self.stop_threads:
+            try:
+                # 从队列获取转录结果
+                item = self.summary_queue.get(timeout=1)
+                audio_file = item['audio_file']
+                transcription = item['transcription']
+                transcript_file = item.get('transcript_file', '')
+                
+                # 检查总结文件是否已存在
+                output_folder = self.output_folder.get() or self.config_manager.get_output_folder()
+                base_name = os.path.splitext(os.path.basename(audio_file))[0]
+                
+                # 查找最新的总结文件
+                summary_dir = os.path.join(output_folder, 'summaries')
+                summary_file = None
+                summary = None
+                
+                if os.path.exists(summary_dir):
+                    # 查找匹配的总结文件
+                    for filename in os.listdir(summary_dir):
+                        if filename.startswith(f"{base_name}_总结_") and filename.endswith(".txt"):
+                            potential_file = os.path.join(summary_dir, filename)
+                            # 如果找到了文件，读取其内容
+                            try:
+                                with open(potential_file, 'r', encoding='utf-8') as f:
+                                    summary = f.read().strip()
+                                if summary:  # 确保文件不为空
+                                    summary_file = potential_file
+                                    break
+                            except Exception:
+                                continue
+                
+                if summary_file and summary:
+                    # 总结文件已存在，跳过总结步骤
+                    self.root.after(0, self.update_file_progress, audio_file, '总结完成(已存在)', 100, "summary")
+                    
+                    # 处理结果
+                    if self.is_folder_mode.get():
+                        self._save_batch_result(audio_file, transcription, summary, transcript_file)
+                    else:
+                        self._display_single_result(audio_file, transcription, summary, transcript_file)
+                else:
+                    # 需要进行总结
+                    # 更新状态
+                    status_text = f'总结中 ({os.path.basename(transcript_file) if transcript_file else ""})'
+                    self.root.after(0, self.update_file_progress, audio_file, status_text, 0, "summary")
+                    
+                    # 生成总结
+                    audio_title = FileUtils.get_audio_title(audio_file)
+                    summary = self.summarizer.summarize(transcription, audio_title, self.template_var.get())
+                    
+                    # 处理结果
+                    if self.is_folder_mode.get():
+                        self._save_batch_result(audio_file, transcription, summary, transcript_file)
+                    else:
+                        self._display_single_result(audio_file, transcription, summary, transcript_file)
+                
+            except queue.Empty:
                 continue
+            except Exception as e:
+                self.root.after(0, self.update_file_progress, audio_file, f'错误: {str(e)}', 0, "summary")
+                print(f"总结文件 {audio_file} 时出错: {str(e)}")
+    
+    def _save_batch_result(self, audio_file, transcription, summary, transcript_file):
+        """保存批量处理结果"""
+        output_folder = self.output_folder.get() or self.config_manager.get_output_folder()
+        
+        # 检查总结文件是否已存在
+        base_name = os.path.splitext(os.path.basename(audio_file))[0]
+        summary_dir = os.path.join(output_folder, 'summaries')
+        summary_exists = False
+        
+        if os.path.exists(summary_dir):
+            for filename in os.listdir(summary_dir):
+                if filename.startswith(f"{base_name}_总结_") and filename.endswith(".txt"):
+                    summary_exists = True
+                    break
+        
+        if not summary_exists:
+            # 只保存总结文件
+            summary_file = self._save_summary_only(audio_file, summary, output_folder)
+            status_text = f'完成 (转录:{os.path.basename(transcript_file) if transcript_file else "无"}, 总结:{os.path.basename(summary_file)})'
+        else:
+            # 总结文件已存在
+            status_text = f'完成 (转录:{os.path.basename(transcript_file) if transcript_file else "无"}, 总结:已存在)'
+        
+        self.root.after(0, self.update_file_progress, audio_file, '总结完成', 100, "summary")
+    
+    def _save_summary_only(self, audio_file, summary, output_folder):
+        """只保存总结文件"""
+        base_name = os.path.splitext(os.path.basename(audio_file))[0]
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        summary_file = os.path.join(output_folder, 'summaries', f"{base_name}_总结_{timestamp}.txt")
+        
+        os.makedirs(os.path.dirname(summary_file), exist_ok=True)
+        with open(summary_file, 'w', encoding='utf-8') as f:
+            f.write(summary)
+        
+        return summary_file
+    
+    def _display_single_result(self, audio_file, transcription, summary, transcript_file):
+        """显示单文件结果"""
+        # 在文件夹模式下清空结果，单文件模式下不清空（支持断点续传）
+        if self.is_folder_mode.get():
+            self.root.after(0, lambda: self.transcription_text.delete(1.0, tk.END))
+            self.root.after(0, lambda: self.summary_text.delete(1.0, tk.END))
+        
+        # 显示结果在界面上
+        self.root.after(0, lambda t=transcription: self.transcription_text.insert(tk.END, t))
+        self.root.after(0, lambda s=summary: self.summary_text.insert(tk.END, s))
+        
+        # 显示转录文件路径
+        if transcript_file and os.path.exists(transcript_file):
+            self.root.after(0, lambda: self.status_var.set(f"转录已保存到: {transcript_file}"))
+        
+        # 检查是否需要保存总结文件
+        output_folder = self.output_folder.get() or self.config_manager.get_output_folder()
+        base_name = os.path.splitext(os.path.basename(audio_file))[0]
+        summary_dir = os.path.join(output_folder, 'summaries')
+        summary_exists = False
+        
+        if os.path.exists(summary_dir):
+            for filename in os.listdir(summary_dir):
+                if filename.startswith(f"{base_name}_总结_") and filename.endswith(".txt"):
+                    summary_exists = True
+                    break
+        
+        if not summary_exists:
+            # 保存总结文件
+            self._save_summary_only(audio_file, summary, output_folder)
+            self.root.after(0, lambda: self.status_var.set(f"转录已保存到: {transcript_file}, 总结已保存"))
+        else:
+            self.root.after(0, lambda: self.status_var.set(f"转录已保存到: {transcript_file}, 总结已存在"))
+        
+        self.root.after(0, self.update_file_progress, audio_file, '总结完成', 100, "summary")
+    
+    def monitor_threads(self):
+        """监控线程状态"""
+        # 检查线程是否还在运行
+        if (self.transcription_thread and self.transcription_thread.is_alive()) or \
+           (self.summary_thread and self.summary_thread.is_alive()):
+            # 线程还在运行，继续监控
+            self.root.after(500, self.monitor_threads)
+        else:
+            # 所有线程已完成
+            self.root.after(0, lambda: self.status_var.set("转录完成"))
+            self.root.after(0, lambda: self.save_button.config(state=tk.NORMAL))
+            self.root.after(0, lambda: self.start_button.config(state=tk.NORMAL))
+            self.root.after(0, lambda: self.stop_button.config(state=tk.DISABLED))
+    
+    def stop_transcription(self):
+        """停止转录过程"""
+        self.stop_threads = True
+        self.status_var.set("正在停止...")
+        self.stop_button.config(state=tk.DISABLED)
+        
+        # 清空队列
+        while not self.transcription_queue.empty():
+            try:
+                self.transcription_queue.get_nowait()
+            except queue.Empty:
+                break
+        
+        while not self.summary_queue.empty():
+            try:
+                self.summary_queue.get_nowait()
+            except queue.Empty:
+                break
     
     def save_results(self):
         """保存转录和总结结果"""
