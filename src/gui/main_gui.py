@@ -60,6 +60,16 @@ class AudioTranscriberGUI:
         self.summary_thread = None
         self.stop_threads = False
         
+        # 总结线程池
+        self.summary_threads = []
+        self.max_summary_threads = 5  # 最多支持5个并发总结线程
+        self.summary_thread_pool = queue.Queue(maxsize=self.max_summary_threads)  # 限制并发数
+        self.active_summary_threads = 0
+        self.summary_results = {}  # 存储总结结果 {文件名: 总结内容}
+        
+        # 计时相关变量
+        self.file_start_times = {}  # 存储每个文件的处理开始时间 {文件路径: {'transcription': 时间, 'summary': 时间}}
+        
         # 设置界面
         self.setup_ui()
         self.load_config()
@@ -441,6 +451,17 @@ class AudioTranscriberGUI:
         stage: "transcription" 或 "summary"
         """
         if file_path in self.file_progress:
+            # 计算耗时
+            elapsed_time = ""
+            if file_path in self.file_start_times and stage in self.file_start_times[file_path]:
+                start_time = self.file_start_times[file_path][stage]
+                current_time = datetime.now()
+                elapsed_seconds = (current_time - start_time).total_seconds()
+                # 格式化为分:秒
+                minutes = int(elapsed_seconds // 60)
+                seconds = int(elapsed_seconds % 60)
+                elapsed_time = f" ({minutes:02d}:{seconds:02d})"
+            
             # 更新进度字典
             if stage == "transcription":
                 self.file_progress[file_path]['trans_status'] = status
@@ -455,9 +476,9 @@ class AudioTranscriberGUI:
                 if values and values[0] == os.path.basename(file_path):
                     # 获取当前值
                     filename = values[0]
-                    trans_status = values[1] if stage == "summary" else status
+                    trans_status = values[1] if stage == "summary" else status + elapsed_time
                     trans_progress = values[2] if stage == "summary" else f"{progress}%"
-                    sum_status = values[3] if stage == "transcription" else status
+                    sum_status = values[3] if stage == "transcription" else status + elapsed_time
                     sum_progress = values[4] if stage == "transcription" else f"{progress}%"
                     
                     # 更新整行
@@ -661,6 +682,10 @@ class AudioTranscriberGUI:
             while not self.summary_queue.empty():
                 self.summary_queue.get()
             
+            # 清空线程池
+            self.summary_threads.clear()
+            self.active_summary_threads = 0
+            
             # 初始化转录器和总结器
             self.transcriber = WhisperTranscriber(self.model_var.get())
             self.summarizer = DeepSeekSummarizer(self.api_key.get(), "prompts")
@@ -678,9 +703,9 @@ class AudioTranscriberGUI:
             self.transcription_thread = threading.Thread(target=self.transcription_worker, daemon=True)
             self.transcription_thread.start()
             
-            # 启动总结线程（I/O密集型）
-            self.summary_thread = threading.Thread(target=self.summary_worker, daemon=True)
-            self.summary_thread.start()
+            # 启动多个总结线程（I/O密集型）
+            # 不预先启动线程，而是在有任务时动态创建
+            self.active_summary_threads = 0
             
             # 监控线程状态
             self.monitor_threads()
@@ -697,6 +722,11 @@ class AudioTranscriberGUI:
             try:
                 # 从队列获取文件
                 audio_file = self.transcription_queue.get(timeout=1)
+                
+                # 记录转录开始时间
+                if audio_file not in self.file_start_times:
+                    self.file_start_times[audio_file] = {}
+                self.file_start_times[audio_file]['transcription'] = datetime.now()
                 
                 # 检查转录文件是否已存在
                 output_folder = self.output_folder.get() or self.config_manager.get_output_folder()
@@ -732,6 +762,13 @@ class AudioTranscriberGUI:
                         'transcription': transcription,
                         'transcript_file': transcript_file
                     })
+                    
+                    # 动态创建总结线程（如果未达到最大线程数）
+                    if self.active_summary_threads < self.max_summary_threads:
+                        summary_thread = threading.Thread(target=self.summary_worker, daemon=True)
+                        summary_thread.start()
+                        self.summary_threads.append(summary_thread)
+                        self.active_summary_threads += 1
                 else:
                     # 需要进行转录
                     # 更新状态
@@ -767,6 +804,13 @@ class AudioTranscriberGUI:
                         'transcription': transcription,
                         'transcript_file': transcript_file  # 传递转录文件路径
                     })
+                    
+                    # 动态创建总结线程（如果未达到最大线程数）
+                    if self.active_summary_threads < self.max_summary_threads:
+                        summary_thread = threading.Thread(target=self.summary_worker, daemon=True)
+                        summary_thread.start()
+                        self.summary_threads.append(summary_thread)
+                        self.active_summary_threads += 1
                 
             except queue.Empty:
                 continue
@@ -784,6 +828,11 @@ class AudioTranscriberGUI:
                 audio_file = item['audio_file']
                 transcription = item['transcription']
                 transcript_file = item.get('transcript_file', '')
+                
+                # 记录总结开始时间
+                if audio_file not in self.file_start_times:
+                    self.file_start_times[audio_file] = {}
+                self.file_start_times[audio_file]['summary'] = datetime.now()
                 
                 # 检查总结文件是否已存在
                 output_folder = self.output_folder.get() or self.config_manager.get_output_folder()
@@ -834,11 +883,29 @@ class AudioTranscriberGUI:
                     else:
                         self._display_single_result(audio_file, transcription, summary, transcript_file)
                 
+                # 从线程池中移除当前线程
+                try:
+                    self.summary_thread_pool.get_nowait()
+                except queue.Empty:
+                    pass
+                
+                # 减少活跃线程计数
+                self.active_summary_threads -= 1
+                
             except queue.Empty:
                 continue
             except Exception as e:
                 self.root.after(0, self.update_file_progress, audio_file, f'错误: {str(e)}', 0, "summary")
                 print(f"总结文件 {audio_file} 时出错: {str(e)}")
+                
+                # 从线程池中移除当前线程
+                try:
+                    self.summary_thread_pool.get_nowait()
+                except queue.Empty:
+                    pass
+                
+                # 减少活跃线程计数
+                self.active_summary_threads -= 1
     
     def _save_batch_result(self, audio_file, transcription, summary, transcript_file):
         """保存批量处理结果"""
@@ -915,23 +982,61 @@ class AudioTranscriberGUI:
     
     def monitor_threads(self):
         """监控线程状态"""
-        # 检查线程是否还在运行
-        if (self.transcription_thread and self.transcription_thread.is_alive()) or \
-           (self.summary_thread and self.summary_thread.is_alive()):
-            # 线程还在运行，继续监控
-            self.root.after(500, self.monitor_threads)
-        else:
-            # 所有线程已完成
-            self.root.after(0, lambda: self.status_var.set("转录完成"))
-            self.root.after(0, lambda: self.save_button.config(state=tk.NORMAL))
-            self.root.after(0, lambda: self.start_button.config(state=tk.NORMAL))
-            self.root.after(0, lambda: self.stop_button.config(state=tk.DISABLED))
+        def check_threads():
+            # 检查转录线程
+            if self.transcription_thread and not self.transcription_thread.is_alive():
+                self.transcription_thread = None
+            
+            # 检查总结线程
+            active_threads = []
+            for thread in self.summary_threads:
+                if thread.is_alive():
+                    active_threads.append(thread)
+            self.summary_threads = active_threads
+            
+            # 如果所有线程都完成，更新状态
+            if (self.transcription_thread is None and 
+                len(self.summary_threads) == 0 and 
+                self.transcription_queue.empty() and 
+                self.summary_queue.empty()):
+                
+                self.status_var.set("处理完成")
+                self.start_button.config(state=tk.NORMAL)
+                self.stop_button.config(state=tk.DISABLED)
+                self.save_button.config(state=tk.NORMAL)
+                
+                # 显示完成消息
+                if self.is_folder_mode.get():
+                    completed_count = sum(1 for status in self.file_progress.values() 
+                                        if status.get('trans_status', '').startswith('转录完成') and 
+                                           status.get('sum_status', '').startswith('总结完成'))
+                    total_count = len(self.audio_files)
+                    self.root.after(0, lambda: messagebox.showinfo(
+                        "批量处理完成", 
+                        f"已完成 {completed_count}/{total_count} 个文件的处理"
+                    ))
+                else:
+                    self.root.after(0, lambda: messagebox.showinfo("处理完成", "音频转录与总结已完成"))
+            else:
+                # 继续监控
+                self.root.after(1000, check_threads)
+        
+        # 开始监控
+        self.root.after(1000, check_threads)
     
     def stop_transcription(self):
         """停止转录过程"""
         self.stop_threads = True
         self.status_var.set("正在停止...")
         self.stop_button.config(state=tk.DISABLED)
+        
+        # 等待所有线程结束
+        if self.transcription_thread and self.transcription_thread.is_alive():
+            self.transcription_thread.join(timeout=1)
+        
+        for thread in self.summary_threads:
+            if thread.is_alive():
+                thread.join(timeout=1)
         
         # 清空队列
         while not self.transcription_queue.empty():
@@ -945,6 +1050,19 @@ class AudioTranscriberGUI:
                 self.summary_queue.get_nowait()
             except queue.Empty:
                 break
+        
+        # 重置状态
+        self.status_var.set("已停止")
+        self.start_button.config(state=tk.NORMAL)
+        self.stop_button.config(state=tk.DISABLED)
+        
+        # 重置线程相关变量
+        self.transcription_thread = None
+        self.summary_threads = []
+        self.active_summary_threads = 0
+        
+        # 重置计时变量
+        self.file_start_times = {}
     
     def save_results(self):
         """保存转录和总结结果"""
