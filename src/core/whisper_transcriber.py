@@ -51,10 +51,23 @@ class WhisperTranscriber:
         
         # 如果提供了进度回调函数，则使用自定义的verbose函数
         if progress_callback is not None and callable(progress_callback):
-            # 获取音频时长
+            # 获取音频时长，使用更健壮的方法
             try:
-                audio_duration = librosa.get_duration(path=audio_file)
-                print(f"音频时长: {audio_duration:.2f}秒")
+                # 尝试使用ffmpeg获取音频时长，避免librosa的兼容性问题
+                import subprocess
+                cmd = [
+                    'ffprobe', '-v', 'error', '-show_entries', 
+                    'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', 
+                    audio_file
+                ]
+                result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=10)
+                if result.returncode == 0 and result.stdout.strip():
+                    audio_duration = float(result.stdout.strip())
+                    print(f"音频时长: {audio_duration:.2f}秒")
+                else:
+                    # 如果ffmpeg失败，尝试使用librosa
+                    audio_duration = librosa.get_duration(path=audio_file)
+                    print(f"音频时长: {audio_duration:.2f}秒")
             except Exception as e:
                 print(f"无法获取音频时长: {e}")
                 audio_duration = None

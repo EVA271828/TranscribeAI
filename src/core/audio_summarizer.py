@@ -23,7 +23,9 @@ def main(output_folder=None):
     print("4. 指定API密钥: python 'audio_summarizer.py' --api_key YOUR_API_KEY")
     print("5. 指定模板: python 'audio_summarizer.py' --template text_summary")
     print("6. 指定模板目录: python 'audio_summarizer.py' --prompts_dir custom_prompts")
-    print("7. 设置配置: python 'audio_summarizer.py' --config")
+    print("7. 指定输出文件夹: python 'audio_summarizer.py' --output output_folder")
+    print("8. 指定源文件夹(保持文件夹结构): python 'audio_summarizer.py' --source_folder source_folder --output output_folder")
+    print("9. 设置配置: python 'audio_summarizer.py' --config")
     print("=========================================\n")
 
     # 解析命令行参数
@@ -33,6 +35,8 @@ def main(output_folder=None):
                         help='选择Whisper模型大小')
     parser.add_argument('--audio', type=str, 
                         help='音频文件路径')
+    parser.add_argument('--source_folder', type=str,
+                        help='源文件夹路径（用于保持文件夹结构）')
     parser.add_argument('--api_key', type=str,
                         help='DeepSeek API密钥')
     parser.add_argument('--template', type=str, default='audio_content_analysis',
@@ -112,6 +116,23 @@ def main(output_folder=None):
     # 获取音频标题
     audio_title = FileUtils.get_audio_title(audio_file)
     
+    # 计算相对路径（如果需要保持源文件夹结构）
+    rel_path = None
+    if args.source_folder and args.output:
+        # 如果提供了源文件夹和输出文件夹，则计算相对路径
+        try:
+            # 获取音频文件的绝对路径
+            abs_audio_file = os.path.abspath(audio_file)
+            # 获取源文件夹的绝对路径
+            abs_source_folder = os.path.abspath(args.source_folder)
+            
+            # 如果音频文件在源文件夹内，计算相对路径
+            if abs_audio_file.startswith(abs_source_folder):
+                rel_path = os.path.relpath(abs_audio_file, abs_source_folder)
+        except Exception:
+            # 如果计算相对路径失败，则忽略
+            rel_path = None
+    
     try:
         # 步骤1: 语音识别
         print("\n=== 开始语音识别 ===")
@@ -146,7 +167,10 @@ def main(output_folder=None):
             # 如果命令行和函数参数都没有提供，则使用配置中的默认值
             final_output_folder = config.get_output_folder()
         
-        transcript_file, summary_file = FileUtils.save_results(transcription, summary, audio_file, final_output_folder)
+        # 使用相对路径保存结果，以保持源文件夹结构
+        transcript_file, summary_file = FileUtils.save_results(
+            transcription, summary, audio_file, final_output_folder, rel_path
+        )
         
         print("\n处理完成！")
         print(f"转录文本长度: {len(transcription)}字符")

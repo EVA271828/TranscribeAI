@@ -243,7 +243,7 @@ class AudioTranscriberGUI:
             folder = filedialog.askdirectory(title="选择包含音频文件的文件夹")
             if folder:
                 self.audio_file.set(folder)
-                self.scan_audio_files()
+                self.scan_and_display_audio_files()
         else:
             # 单文件模式
             filetypes = [
@@ -353,8 +353,29 @@ class AudioTranscriberGUI:
         # 启用保存按钮
         self.save_button.config(state=tk.NORMAL)
     
-    def scan_audio_files(self):
-        """扫描文件夹中的音频文件"""
+    def scan_audio_files(self, source_folder):
+        """扫描文件夹中的所有音频文件，保持源文件夹结构"""
+        audio_files = []
+        
+        # 支持的音频文件扩展名
+        audio_extensions = ['.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac', '.wma']
+        
+        # 递归扫描文件夹
+        for root, _, files in os.walk(source_folder):
+            for file in files:
+                # 检查文件扩展名
+                if any(file.lower().endswith(ext) for ext in audio_extensions):
+                    full_path = os.path.join(root, file)
+                    
+                    # 计算相对于源文件夹的路径
+                    rel_path = os.path.relpath(full_path, source_folder)
+                    
+                    audio_files.append((full_path, rel_path))
+        
+        return audio_files
+    
+    def scan_and_display_audio_files(self):
+        """扫描文件夹中的音频文件（包括嵌套子文件夹）并显示在UI中"""
         folder = self.audio_file.get()
         if not folder or not os.path.exists(folder):
             return
@@ -366,53 +387,67 @@ class AudioTranscriberGUI:
         self.audio_files = []
         self.file_progress = {}
         
-        # 支持的音频文件扩展名
-        audio_extensions = ['.mp3', '.wav', '.m4a', '.flac', '.ogg']
+        # 获取音频文件列表
+        audio_files = self.scan_audio_files(folder)
         
         # 获取输出文件夹
         output_folder = self.output_folder.get() or self.config_manager.get_output_folder()
         transcript_dir = os.path.join(output_folder, 'transcripts')
         summary_dir = os.path.join(output_folder, 'summaries')
         
-        # 扫描文件夹中的音频文件
-        for filename in os.listdir(folder):
-            if any(filename.lower().endswith(ext) for ext in audio_extensions):
-                file_path = os.path.join(folder, filename)
-                self.audio_files.append(file_path)
+        # 处理每个音频文件
+        for file_path, rel_path in audio_files:
+            self.audio_files.append((file_path, rel_path))
+            
+            # 检查转录和总结文件是否已存在
+            base_name = os.path.splitext(os.path.basename(file_path))[0]
+            trans_status = '等待'
+            trans_progress = '0%'
+            sum_status = '等待'
+            sum_progress = '0%'
+            
+            # 检查转录文件
+            if os.path.exists(transcript_dir):
+                # 构建转录子目录路径
+                trans_subdir = transcript_dir
+                rel_dir = os.path.dirname(rel_path)
+                if rel_dir:
+                    trans_subdir = os.path.join(transcript_dir, rel_dir)
                 
-                # 检查转录和总结文件是否已存在
-                base_name = os.path.splitext(filename)[0]
-                trans_status = '等待'
-                trans_progress = '0%'
-                sum_status = '等待'
-                sum_progress = '0%'
-                
-                # 检查转录文件
-                if os.path.exists(transcript_dir):
-                    for trans_filename in os.listdir(transcript_dir):
+                if os.path.exists(trans_subdir):
+                    for trans_filename in os.listdir(trans_subdir):
                         if trans_filename.startswith(f"{base_name}_转录_") and trans_filename.endswith(".txt"):
                             trans_status = '转录完成(已存在)'
                             trans_progress = '100%'
                             break
+            
+            # 检查总结文件
+            if os.path.exists(summary_dir):
+                # 构建总结子目录路径
+                sum_subdir = summary_dir
+                rel_dir = os.path.dirname(rel_path)
+                if rel_dir:
+                    sum_subdir = os.path.join(summary_dir, rel_dir)
                 
-                # 检查总结文件
-                if os.path.exists(summary_dir):
-                    for sum_filename in os.listdir(summary_dir):
+                if os.path.exists(sum_subdir):
+                    for sum_filename in os.listdir(sum_subdir):
                         if sum_filename.startswith(f"{base_name}_总结_") and sum_filename.endswith(".txt"):
                             sum_status = '总结完成(已存在)'
                             sum_progress = '100%'
                             break
-                
-                # 添加到进度字典
-                self.file_progress[file_path] = {
-                    'trans_status': trans_status,
-                    'trans_progress': int(trans_progress.rstrip('%')),
-                    'sum_status': sum_status,
-                    'sum_progress': int(sum_progress.rstrip('%'))
-                }
-                
-                # 添加到树形视图
-                self.file_tree.insert('', 'end', values=(filename, trans_status, trans_progress, sum_status, sum_progress))
+            
+            # 添加到进度字典
+            self.file_progress[file_path] = {
+                'trans_status': trans_status,
+                'trans_progress': int(trans_progress.rstrip('%')),
+                'sum_status': sum_status,
+                'sum_progress': int(sum_progress.rstrip('%')),
+                'rel_path': rel_path  # 存储相对路径
+            }
+            
+            # 添加到树形视图，显示相对路径
+            display_name = rel_path if rel_path != os.path.basename(file_path) else os.path.basename(file_path)
+            self.file_tree.insert('', 'end', values=(display_name, trans_status, trans_progress, sum_status, sum_progress))
         
         if not self.audio_files:
             messagebox.showinfo("提示", "所选文件夹中没有找到音频文件")
@@ -475,6 +510,17 @@ class AudioTranscriberGUI:
                 values = self.file_tree.item(item, 'values')
                 if values and values[0] == os.path.basename(file_path):
                     # 获取当前值
+                    filename = values[0]
+                    trans_status = values[1] if stage == "summary" else status + elapsed_time
+                    trans_progress = values[2] if stage == "summary" else f"{progress}%"
+                    sum_status = values[3] if stage == "transcription" else status + elapsed_time
+                    sum_progress = values[4] if stage == "transcription" else f"{progress}%"
+                    
+                    # 更新整行
+                    self.file_tree.item(item, values=(filename, trans_status, trans_progress, sum_status, sum_progress))
+                    break
+                elif values and file_path in self.file_progress and values[0] == self.file_progress[file_path].get('rel_path', os.path.basename(file_path)):
+                    # 如果相对路径匹配，也进行更新
                     filename = values[0]
                     trans_status = values[1] if stage == "summary" else status + elapsed_time
                     trans_progress = values[2] if stage == "summary" else f"{progress}%"
@@ -693,11 +739,11 @@ class AudioTranscriberGUI:
             # 根据模式选择处理方式
             if self.is_folder_mode.get():
                 # 文件夹模式 - 批量处理
-                for audio_file in self.audio_files:
-                    self.transcription_queue.put(audio_file)
+                for audio_file_tuple in self.audio_files:
+                    self.transcription_queue.put(audio_file_tuple)
             else:
                 # 单文件模式
-                self.transcription_queue.put(self.audio_file.get())
+                self.transcription_queue.put((self.audio_file.get(), os.path.basename(self.audio_file.get())))
             
             # 启动转录线程（CPU密集型）
             self.transcription_thread = threading.Thread(target=self.transcription_worker, daemon=True)
@@ -720,8 +766,10 @@ class AudioTranscriberGUI:
         """转录工作线程 - 处理CPU密集型任务"""
         while not self.stop_threads and not self.transcription_queue.empty():
             try:
-                # 从队列获取文件
-                audio_file = self.transcription_queue.get(timeout=1)
+                # 从队列获取文件（现在是元组：(完整路径, 相对路径)）
+                audio_file_tuple = self.transcription_queue.get(timeout=1)
+                audio_file = audio_file_tuple[0]  # 完整路径
+                rel_path = audio_file_tuple[1]    # 相对路径
                 
                 # 记录转录开始时间
                 if audio_file not in self.file_start_times:
@@ -759,6 +807,7 @@ class AudioTranscriberGUI:
                     # 将结果放入总结队列
                     self.summary_queue.put({
                         'audio_file': audio_file,
+                        'rel_path': rel_path,
                         'transcription': transcription,
                         'transcript_file': transcript_file
                     })
@@ -786,6 +835,20 @@ class AudioTranscriberGUI:
                     )
                     
                     # 立即保存转录文件
+                    
+                    # 获取输出文件夹
+                    output_folder = self.output_folder.get() or self.config.get_output_folder()
+                    
+                    # 创建转录目录
+                    transcript_dir = os.path.join(output_folder, 'transcripts')
+                    
+                    # 获取相对路径的目录部分
+                    rel_dir = os.path.dirname(rel_path)
+                    
+                    # 如果有相对路径的目录部分，则在转录目录下创建相同的子目录结构
+                    if rel_dir:
+                        transcript_dir = os.path.join(transcript_dir, rel_dir)
+                    
                     os.makedirs(transcript_dir, exist_ok=True)
                     
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -801,8 +864,9 @@ class AudioTranscriberGUI:
                     # 将结果放入总结队列
                     self.summary_queue.put({
                         'audio_file': audio_file,
+                        'rel_path': rel_path,
                         'transcription': transcription,
-                        'transcript_file': transcript_file  # 传递转录文件路径
+                        'transcript_file': transcript_file
                     })
                     
                     # 动态创建总结线程（如果未达到最大线程数）
@@ -826,6 +890,7 @@ class AudioTranscriberGUI:
                 # 从队列获取转录结果
                 item = self.summary_queue.get(timeout=1)
                 audio_file = item['audio_file']
+                rel_path = item['rel_path']  # 获取相对路径
                 transcription = item['transcription']
                 transcript_file = item.get('transcript_file', '')
                 
@@ -838,8 +903,19 @@ class AudioTranscriberGUI:
                 output_folder = self.output_folder.get() or self.config_manager.get_output_folder()
                 base_name = os.path.splitext(os.path.basename(audio_file))[0]
                 
-                # 查找最新的总结文件
+                # 获取输出文件夹
+                output_folder = self.output_folder.get() or self.config.get_output_folder()
+                
+                # 创建总结目录
                 summary_dir = os.path.join(output_folder, 'summaries')
+                
+                # 获取相对路径的目录部分
+                rel_dir = os.path.dirname(rel_path)
+                
+                # 如果有相对路径的目录部分，则在总结目录下创建相同的子目录结构
+                if rel_dir:
+                    summary_dir = os.path.join(summary_dir, rel_dir)
+                
                 summary_file = None
                 summary = None
                 
@@ -864,7 +940,7 @@ class AudioTranscriberGUI:
                     
                     # 处理结果
                     if self.is_folder_mode.get():
-                        self._save_batch_result(audio_file, transcription, summary, transcript_file)
+                        self._save_batch_result(audio_file, rel_path, transcription, summary, transcript_file)
                     else:
                         self._display_single_result(audio_file, transcription, summary, transcript_file)
                 else:
@@ -879,7 +955,7 @@ class AudioTranscriberGUI:
                     
                     # 处理结果
                     if self.is_folder_mode.get():
-                        self._save_batch_result(audio_file, transcription, summary, transcript_file)
+                        self._save_batch_result(audio_file, rel_path, transcription, summary, transcript_file)
                     else:
                         self._display_single_result(audio_file, transcription, summary, transcript_file)
                 
@@ -907,13 +983,22 @@ class AudioTranscriberGUI:
                 # 减少活跃线程计数
                 self.active_summary_threads -= 1
     
-    def _save_batch_result(self, audio_file, transcription, summary, transcript_file):
-        """保存批量处理结果"""
-        output_folder = self.output_folder.get() or self.config_manager.get_output_folder()
+    def _save_batch_result(self, audio_file, rel_path, transcription, summary, transcript_file):
+        """保存批量处理结果 - 保持源文件夹结构"""
+        # 创建保持源文件夹结构的输出路径
+        # 获取相对路径的目录部分
+        rel_dir = os.path.dirname(rel_path)
+        
+        # 获取输出文件夹
+        output_folder = self.output_folder.get() or self.config.get_output_folder()
         
         # 检查总结文件是否已存在
         base_name = os.path.splitext(os.path.basename(audio_file))[0]
         summary_dir = os.path.join(output_folder, 'summaries')
+        # 如果有相对路径的目录部分，则在总结目录下创建相同的子目录结构
+        if rel_dir:
+            summary_dir = os.path.join(summary_dir, rel_dir)
+        
         summary_exists = False
         
         if os.path.exists(summary_dir):
@@ -932,15 +1017,40 @@ class AudioTranscriberGUI:
         
         self.root.after(0, self.update_file_progress, audio_file, '总结完成', 100, "summary")
     
-    def _save_summary_only(self, audio_file, summary, output_folder):
-        """只保存总结文件"""
+    def _save_summary_only(self, audio_file, summary, output_folder, rel_path=None):
+        """只保存总结文件 - 保持源文件夹结构"""
         base_name = os.path.splitext(os.path.basename(audio_file))[0]
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        summary_file = os.path.join(output_folder, 'summaries', f"{base_name}_总结_{timestamp}.txt")
         
-        os.makedirs(os.path.dirname(summary_file), exist_ok=True)
+        # 创建保持源文件夹结构的输出路径
+        summary_dir = os.path.normpath(os.path.join(output_folder, 'summaries'))
+        
+        # 如果有相对路径，则在总结目录下创建相同的子目录结构
+        if rel_path:
+            rel_dir = os.path.dirname(rel_path)
+            if rel_dir:
+                summary_dir = os.path.normpath(os.path.join(summary_dir, rel_dir))
+        
+        summary_file = os.path.normpath(os.path.join(summary_dir, f"{base_name}_总结_{timestamp}.txt"))
+        
+        # 确保目录存在
+        os.makedirs(summary_dir, exist_ok=True)
         with open(summary_file, 'w', encoding='utf-8') as f:
             f.write(summary)
+        
+        # 更新进度字典中的文件状态
+        if audio_file in self.file_progress:
+            self.file_progress[audio_file]['sum_status'] = '总结完成'
+            self.file_progress[audio_file]['sum_progress'] = 100
+        
+        # 更新树形视图
+        for item in self.file_tree.get_children():
+            values = self.file_tree.item(item, 'values')
+            if values and values[0] == self.file_progress[audio_file].get('rel_path', os.path.basename(audio_file)):
+                self.file_tree.item(item, values=(
+                    values[0], values[1], values[2], '总结完成', '100%'
+                ))
+                break
         
         return summary_file
     
@@ -960,7 +1070,7 @@ class AudioTranscriberGUI:
             self.root.after(0, lambda: self.status_var.set(f"转录已保存到: {transcript_file}"))
         
         # 检查是否需要保存总结文件
-        output_folder = self.output_folder.get() or self.config_manager.get_output_folder()
+        output_folder = self.output_folder.get() or self.config.get_output_folder()
         base_name = os.path.splitext(os.path.basename(audio_file))[0]
         summary_dir = os.path.join(output_folder, 'summaries')
         summary_exists = False
@@ -973,7 +1083,7 @@ class AudioTranscriberGUI:
         
         if not summary_exists:
             # 保存总结文件
-            self._save_summary_only(audio_file, summary, output_folder)
+            self._save_summary_only(audio_file, summary, rel_path)
             self.root.after(0, lambda: self.status_var.set(f"转录已保存到: {transcript_file}, 总结已保存"))
         else:
             self.root.after(0, lambda: self.status_var.set(f"转录已保存到: {transcript_file}, 总结已存在"))
@@ -1064,16 +1174,35 @@ class AudioTranscriberGUI:
         # 重置计时变量
         self.file_start_times = {}
     
-    def save_results(self):
+    def save_results(self, audio_file=None, transcription=None, summary=None, rel_path=None):
         """保存转录和总结结果"""
+        # 如果传入了参数，使用传入的参数保存单个文件的结果
+        if audio_file and transcription is not None and summary is not None:
+            output_folder = self.output_folder.get() or self.config.get_output_folder()
+            
+            # 保存结果，保持源文件夹结构
+            transcript_file, summary_file = FileUtils.save_results(
+                transcription, summary, audio_file, output_folder, rel_path
+            )
+            
+            # 显示保存位置
+            messagebox.showinfo(
+                "保存完成",
+                f"转录文件: {transcript_file}\n总结文件: {summary_file}"
+            )
+            return
+        
         # 批量处理模式下，结果已经自动保存
         if self.is_folder_mode.get() and self.audio_files:
             output_dir = self.config.get_output_folder() or 'output'
+            # 确保路径使用正确的分隔符
+            transcript_dir = os.path.normpath(os.path.join(output_dir, 'transcripts'))
+            summary_dir = os.path.normpath(os.path.join(output_dir, 'summaries'))
             messagebox.showinfo(
                 "保存结果",
                 f"批量处理结果已保存到以下目录：\n\n"
-                f"转录文件: {os.path.join(output_dir, 'transcripts')}\n"
-                f"总结文件: {os.path.join(output_dir, 'summaries')}"
+                f"转录文件: {transcript_dir}\n"
+                f"总结文件: {summary_dir}"
             )
             self.status_var.set("结果已保存")
             return
@@ -1090,20 +1219,24 @@ class AudioTranscriberGUI:
             # 使用用户选择的输出文件夹，如果没有则使用配置中的默认值
             output_dir = self.output_folder.get() or self.config.get_output_folder() or 'output'
             
-            # 确保输出文件夹存在
+            # 规范化路径并确保输出文件夹存在
+            output_dir = os.path.normpath(output_dir)
             os.makedirs(output_dir, exist_ok=True)
             
             # 获取音频文件名（不含扩展名）作为基础文件名
             file_path = self.audio_file.get()
+            if not file_path:
+                raise ValueError("未选择音频文件")
+            
             base_name = os.path.splitext(os.path.basename(file_path))[0]
             
             # 保存转录文本
-            transcript_file = os.path.join(output_dir, f"{base_name}_transcript.txt")
+            transcript_file = os.path.normpath(os.path.join(output_dir, f"{base_name}_transcript.txt"))
             with open(transcript_file, 'w', encoding='utf-8') as f:
                 f.write(transcription)
             
             # 保存总结文本
-            summary_file = os.path.join(output_dir, f"{base_name}_summary.txt")
+            summary_file = os.path.normpath(os.path.join(output_dir, f"{base_name}_summary.txt"))
             with open(summary_file, 'w', encoding='utf-8') as f:
                 f.write(summary)
             
