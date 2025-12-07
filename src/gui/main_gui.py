@@ -33,16 +33,23 @@ class AudioTranscriberGUI:
         
         # 初始化变量
         self.audio_file = tk.StringVar()
+        self.audio_folder = tk.StringVar()
         self.model_var = tk.StringVar()
         self.api_key = tk.StringVar()
         self.template_var = tk.StringVar()
         self.output_folder = tk.StringVar()
         self.transcription_result = tk.StringVar()
         self.summary_result = tk.StringVar()
+        self.is_folder_mode = tk.BooleanVar(value=False)
         
         # 初始化转录器和总结器
         self.transcriber = None
         self.summarizer = None
+        
+        # 文件列表和进度跟踪
+        self.audio_files = []
+        self.current_file_index = 0
+        self.file_progress = {}
         
         # 设置界面
         self.setup_ui()
@@ -95,12 +102,52 @@ class AudioTranscriberGUI:
     
     def setup_settings_tab(self, parent):
         """设置选项卡"""
-        # 音频文件选择
-        file_frame = ttk.LabelFrame(parent, text="音频文件", padding="10")
+        # 输入模式选择
+        mode_frame = ttk.LabelFrame(parent, text="输入模式", padding="10")
+        mode_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Radiobutton(mode_frame, text="单个文件", variable=self.is_folder_mode, value=False).pack(side=tk.LEFT, padx=(0, 20))
+        ttk.Radiobutton(mode_frame, text="文件夹批量处理", variable=self.is_folder_mode, value=True).pack(side=tk.LEFT)
+        
+        # 统一的文件/文件夹选择
+        file_frame = ttk.LabelFrame(parent, text="音频文件/文件夹", padding="10")
         file_frame.pack(fill=tk.X, pady=(0, 10))
         
-        ttk.Entry(file_frame, textvariable=self.audio_file, width=70).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
-        ttk.Button(file_frame, text="浏览...", command=self.browse_file).pack(side=tk.RIGHT)
+        self.file_entry = ttk.Entry(file_frame, textvariable=self.audio_file, width=70)
+        self.file_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+        ttk.Button(file_frame, text="浏览...", command=self.browse_file_or_folder).pack(side=tk.RIGHT)
+        
+        # 文件列表显示（仅在文件夹模式下显示）
+        self.list_frame = ttk.LabelFrame(parent, text="文件列表", padding="10")
+        
+        # 创建Treeview显示文件列表和进度
+        columns = ("文件名", "状态", "进度")
+        self.file_tree = ttk.Treeview(self.list_frame, columns=columns, show="tree headings", height=8)
+        
+        # 设置列标题
+        self.file_tree.heading("#0", text="")
+        self.file_tree.heading("文件名", text="文件名")
+        self.file_tree.heading("状态", text="状态")
+        self.file_tree.heading("进度", text="进度")
+        
+        # 设置列宽
+        self.file_tree.column("#0", width=0, stretch=False)
+        self.file_tree.column("文件名", width=300, minwidth=200)
+        self.file_tree.column("状态", width=100, minwidth=80)
+        self.file_tree.column("进度", width=100, minwidth=80)
+        
+        # 添加滚动条
+        scrollbar = ttk.Scrollbar(self.list_frame, orient="vertical", command=self.file_tree.yview)
+        self.file_tree.configure(yscrollcommand=scrollbar.set)
+        
+        self.file_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # 根据输入模式启用/禁用控件
+        self.update_input_mode()
+        
+        # 绑定输入模式切换事件
+        self.is_folder_mode.trace_add('write', lambda *args: self.update_input_mode())
         
         # 模型选择
         model_frame = ttk.LabelFrame(parent, text="Whisper模型", padding="10")
@@ -163,20 +210,94 @@ class AudioTranscriberGUI:
         self.summary_text = scrolledtext.ScrolledText(summary_frame, wrap=tk.WORD, height=10)
         self.summary_text.pack(fill=tk.BOTH, expand=True)
     
-    def browse_file(self):
-        """浏览选择音频文件"""
-        filetypes = [
-            ("音频文件", "*.mp3 *.wav *.m4a *.flac *.ogg"),
-            ("所有文件", "*.*")
-        ]
+    def browse_file_or_folder(self):
+        """根据当前模式浏览选择文件或文件夹"""
+        if self.is_folder_mode.get():
+            # 文件夹模式
+            folder = filedialog.askdirectory(title="选择包含音频文件的文件夹")
+            if folder:
+                self.audio_file.set(folder)
+                self.scan_audio_files()
+        else:
+            # 单文件模式
+            filetypes = [
+                ("音频文件", "*.mp3 *.wav *.m4a *.flac *.ogg"),
+                ("所有文件", "*.*")
+            ]
+            
+            filename = filedialog.askopenfilename(
+                title="选择音频文件",
+                filetypes=filetypes
+            )
+            
+            if filename:
+                self.audio_file.set(filename)
+    
+    def scan_audio_files(self):
+        """扫描文件夹中的音频文件"""
+        folder = self.audio_file.get()
+        if not folder or not os.path.exists(folder):
+            return
         
-        filename = filedialog.askopenfilename(
-            title="选择音频文件",
-            filetypes=filetypes
-        )
+        # 清空文件列表
+        for item in self.file_tree.get_children():
+            self.file_tree.delete(item)
         
-        if filename:
-            self.audio_file.set(filename)
+        self.audio_files = []
+        self.file_progress = {}
+        
+        # 支持的音频文件扩展名
+        audio_extensions = ['.mp3', '.wav', '.m4a', '.flac', '.ogg']
+        
+        # 扫描文件夹中的音频文件
+        for filename in os.listdir(folder):
+            if any(filename.lower().endswith(ext) for ext in audio_extensions):
+                file_path = os.path.join(folder, filename)
+                self.audio_files.append(file_path)
+                self.file_progress[file_path] = {'status': '等待', 'progress': 0}
+                
+                # 添加到树形视图
+                self.file_tree.insert('', 'end', values=(filename, '等待', '0%'))
+        
+        if not self.audio_files:
+            messagebox.showinfo("提示", "所选文件夹中没有找到音频文件")
+    
+    def update_input_mode(self):
+        """根据输入模式更新界面"""
+        is_folder = self.is_folder_mode.get()
+        
+        # 更新标签文本
+        if is_folder:
+            # 文件夹模式
+            for widget in self.file_entry.master.winfo_children():
+                if isinstance(widget, ttk.LabelFrame):
+                    widget.config(text="音频文件夹")
+                    break
+            
+            # 显示文件列表
+            self.list_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10), after=self.file_entry.master)
+        else:
+            # 单文件模式
+            for widget in self.file_entry.master.winfo_children():
+                if isinstance(widget, ttk.LabelFrame):
+                    widget.config(text="音频文件")
+                    break
+            
+            # 隐藏文件列表
+            self.list_frame.pack_forget()
+    
+    def update_file_progress(self, file_path, status, progress):
+        """更新文件处理进度"""
+        if file_path in self.file_progress:
+            self.file_progress[file_path]['status'] = status
+            self.file_progress[file_path]['progress'] = progress
+            
+            # 更新树形视图中的显示
+            for item in self.file_tree.get_children():
+                values = self.file_tree.item(item, 'values')
+                if values and values[0] == os.path.basename(file_path):
+                    self.file_tree.item(item, values=(values[0], status, f"{progress}%"))
+                    break
     
     def browse_output_folder(self):
         """浏览选择输出文件夹"""
@@ -312,16 +433,33 @@ class AudioTranscriberGUI:
     def start_transcription(self):
         """开始转录"""
         # 验证输入
-        if not self.audio_file.get():
-            messagebox.showerror("错误", "请选择音频文件")
-            return
+        if self.is_folder_mode.get():
+            # 文件夹模式
+            folder = self.audio_file.get()
+            if not folder:
+                messagebox.showerror("错误", "请选择音频文件夹")
+                return
+            
+            if not os.path.exists(folder):
+                messagebox.showerror("错误", "所选文件夹不存在")
+                return
+            
+            if not self.audio_files:
+                messagebox.showerror("错误", "文件夹中没有音频文件")
+                return
+        else:
+            # 单文件模式
+            file_path = self.audio_file.get()
+            if not file_path:
+                messagebox.showerror("错误", "请选择音频文件")
+                return
+            
+            if not os.path.exists(file_path):
+                messagebox.showerror("错误", "所选文件不存在")
+                return
         
         if not self.api_key.get():
             messagebox.showerror("错误", "请输入DeepSeek API密钥")
-            return
-        
-        if not os.path.exists(self.audio_file.get()):
-            messagebox.showerror("错误", "音频文件不存在")
             return
         
         # 禁用按钮
@@ -331,6 +469,11 @@ class AudioTranscriberGUI:
         # 清空结果
         self.transcription_text.delete(1.0, tk.END)
         self.summary_text.delete(1.0, tk.END)
+        
+        # 重置进度
+        if self.is_folder_mode.get():
+            for file_path in self.audio_files:
+                self.update_file_progress(file_path, '等待', 0)
         
         # 更新状态
         self.status_var.set("正在初始化模型...")
@@ -344,31 +487,16 @@ class AudioTranscriberGUI:
             # 初始化转录器
             self.transcriber = WhisperTranscriber(self.model_var.get())
             
-            # 定义进度回调函数
-            def progress_callback(progress):
-                # 更新状态栏显示进度
-                self.root.after(0, lambda: self.status_var.set(f"正在转录音频... {progress:.1f}%"))
-            
-            # 转录音频（带进度回调）
-            self.root.after(0, lambda: self.status_var.set("正在转录音频... 0%"))
-            transcription = self.transcriber.transcribe(
-                self.audio_file.get(), 
-                progress_callback=progress_callback
-            )
-            
-            # 显示转录结果
-            self.root.after(0, lambda: self.transcription_text.insert(tk.END, transcription))
-            
             # 初始化总结器
             self.summarizer = DeepSeekSummarizer(self.api_key.get(), "prompts")
             
-            # 总结内容
-            self.root.after(0, lambda: self.status_var.set("正在生成总结..."))
-            audio_title = FileUtils.get_audio_title(self.audio_file.get())
-            summary = self.summarizer.summarize(transcription, audio_title, self.template_var.get())
-            
-            # 显示总结结果
-            self.root.after(0, lambda: self.summary_text.insert(tk.END, summary))
+            # 根据模式选择处理方式
+            if self.is_folder_mode.get():
+                # 文件夹模式 - 批量处理
+                self.process_batch_files()
+            else:
+                # 单文件模式
+                self.process_single_file(self.audio_file.get())
             
             # 更新状态
             self.root.after(0, lambda: self.status_var.set("转录完成"))
@@ -385,25 +513,130 @@ class AudioTranscriberGUI:
             # 启用开始按钮
             self.root.after(0, lambda: self.start_button.config(state=tk.NORMAL))
     
+    def process_single_file(self, audio_file):
+        """处理单个音频文件"""
+        # 定义进度回调函数
+        def progress_callback(progress):
+            # 更新状态栏显示进度
+            self.root.after(0, lambda: self.status_var.set(f"正在转录音频... {progress:.1f}%"))
+        
+        # 转录音频（带进度回调）
+        self.root.after(0, lambda: self.status_var.set("正在转录音频... 0%"))
+        transcription = self.transcriber.transcribe(
+            audio_file, 
+            progress_callback=progress_callback
+        )
+        
+        # 显示转录结果
+        self.root.after(0, lambda: self.transcription_text.insert(tk.END, transcription))
+        
+        # 总结内容
+        self.root.after(0, lambda: self.status_var.set("正在生成总结..."))
+        audio_title = FileUtils.get_audio_title(audio_file)
+        summary = self.summarizer.summarize(transcription, audio_title, self.template_var.get())
+        
+        # 显示总结结果
+        self.root.after(0, lambda: self.summary_text.insert(tk.END, summary))
+    
+    def process_batch_files(self):
+        """批量处理文件夹中的音频文件"""
+        total_files = len(self.audio_files)
+        self.current_file_index = 0
+        
+        # 处理每个文件
+        for i, audio_file in enumerate(self.audio_files):
+            self.current_file_index = i
+            
+            # 更新当前文件状态
+            self.root.after(0, lambda f=audio_file: self.update_file_progress(f, '转录中', 0))
+            self.root.after(0, lambda i=i, total=total_files: self.status_var.set(f"正在处理文件 {i+1}/{total_files}"))
+            
+            try:
+                # 定义进度回调函数
+                def progress_callback(progress):
+                    # 更新文件进度
+                    self.root.after(0, lambda f=audio_file, p=progress: self.update_file_progress(f, '转录中', p))
+                
+                # 转录音频
+                transcription = self.transcriber.transcribe(
+                    audio_file, 
+                    progress_callback=progress_callback
+                )
+                
+                # 更新状态为总结中
+                self.root.after(0, lambda f=audio_file: self.update_file_progress(f, '总结中', 95))
+                
+                # 总结内容
+                audio_title = FileUtils.get_audio_title(audio_file)
+                summary = self.summarizer.summarize(transcription, audio_title, self.template_var.get())
+                
+                # 保存结果
+                output_folder = self.output_folder.get() or self.config.get_output_folder()
+                transcript_file, summary_file = FileUtils.save_results(
+                    transcription, summary, audio_file, output_folder
+                )
+                
+                # 更新状态为完成
+                self.root.after(0, lambda f=audio_file: self.update_file_progress(f, '完成', 100))
+                
+                # 在结果选项卡中显示最后一个文件的结果
+                if i == total_files - 1:
+                    self.root.after(0, lambda: self.transcription_text.insert(tk.END, f"文件: {os.path.basename(audio_file)}\n{transcription}\n\n"))
+                    self.root.after(0, lambda: self.summary_text.insert(tk.END, f"文件: {os.path.basename(audio_file)}\n{summary}\n\n"))
+                
+            except Exception as e:
+                # 更新状态为错误
+                self.root.after(0, lambda f=audio_file: self.update_file_progress(f, f'错误: {str(e)}', 0))
+                print(f"处理文件 {audio_file} 时出错: {str(e)}")
+                continue
+    
     def save_results(self):
-        """保存结果"""
+        """保存转录和总结结果"""
+        # 批量处理模式下，结果已经自动保存
+        if self.is_folder_mode.get() and self.audio_files:
+            output_dir = self.config.get_output_folder() or 'output'
+            messagebox.showinfo(
+                "保存结果",
+                f"批量处理结果已保存到以下目录：\n\n"
+                f"转录文件: {os.path.join(output_dir, 'transcripts')}\n"
+                f"总结文件: {os.path.join(output_dir, 'summaries')}"
+            )
+            self.status_var.set("结果已保存")
+            return
+        
+        # 单文件模式下的保存逻辑
         transcription = self.transcription_text.get(1.0, tk.END).strip()
         summary = self.summary_text.get(1.0, tk.END).strip()
         
-        if not transcription or not summary:
-            messagebox.showerror("错误", "没有可保存的结果")
+        if not transcription and not summary:
+            messagebox.showwarning("警告", "没有可保存的内容")
             return
         
         try:
             # 使用用户选择的输出文件夹，如果没有则使用配置中的默认值
-            output_folder = self.output_folder.get() or self.config.get_output_folder()
-            transcript_file, summary_file = FileUtils.save_results(
-                transcription, summary, self.audio_file.get(), output_folder
-            )
-            messagebox.showinfo("成功", f"结果已保存:\n转录: {transcript_file}\n总结: {summary_file}")
+            output_dir = self.output_folder.get() or self.config.get_output_folder() or 'output'
+            
+            # 确保输出文件夹存在
+            os.makedirs(output_dir, exist_ok=True)
+            
+            # 获取音频文件名（不含扩展名）作为基础文件名
+            file_path = self.audio_file.get()
+            base_name = os.path.splitext(os.path.basename(file_path))[0]
+            
+            # 保存转录文本
+            transcript_file = os.path.join(output_dir, f"{base_name}_transcript.txt")
+            with open(transcript_file, 'w', encoding='utf-8') as f:
+                f.write(transcription)
+            
+            # 保存总结文本
+            summary_file = os.path.join(output_dir, f"{base_name}_summary.txt")
+            with open(summary_file, 'w', encoding='utf-8') as f:
+                f.write(summary)
+            
+            messagebox.showinfo("保存成功", f"结果已保存:\n转录: {transcript_file}\n总结: {summary_file}")
             self.status_var.set("结果已保存")
         except Exception as e:
-            messagebox.showerror("错误", f"保存失败: {str(e)}")
+            messagebox.showerror("保存失败", f"保存结果时出错: {str(e)}")
 
 
 def main():
