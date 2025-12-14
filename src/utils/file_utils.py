@@ -73,7 +73,7 @@ class FileUtils:
             summary_dir = os.path.join(output_folder, 'summaries')
             os.makedirs(summary_dir, exist_ok=True)
             
-        summary_file = os.path.join(summary_dir, f"{audio_name}_总结_{timestamp}.md")
+        summary_file = os.path.join(summary_dir, f"{audio_name}_总结{timestamp}.md")
         
         # 保存转录文本到txt文件
         with open(transcript_file, 'w', encoding='utf-8') as f:

@@ -301,7 +301,7 @@ class AudioTranscriberGUI:
         # 检查总结文件
         if os.path.exists(summary_dir):
             for sum_filename in os.listdir(summary_dir):
-                if sum_filename.startswith(f"{base_name}_总结_") and sum_filename.endswith(".md"):
+                if sum_filename.startswith(f"{base_name}_总结") and sum_filename.endswith(".md"):
                     potential_file = os.path.join(summary_dir, sum_filename)
                     try:
                         with open(potential_file, 'r', encoding='utf-8') as f:
@@ -347,7 +347,7 @@ class AudioTranscriberGUI:
         # 查找并加载总结文件
         if os.path.exists(summary_dir):
             for sum_filename in os.listdir(summary_dir):
-                if sum_filename.startswith(f"{base_name}_总结_") and sum_filename.endswith(".md"):
+                if sum_filename.startswith(f"{base_name}_总结") and sum_filename.endswith(".md"):
                     potential_file = os.path.join(summary_dir, sum_filename)
                     try:
                         with open(potential_file, 'r', encoding='utf-8') as f:
@@ -454,7 +454,7 @@ class AudioTranscriberGUI:
                 
                 if os.path.exists(sum_subdir):
                     for sum_filename in os.listdir(sum_subdir):
-                        if sum_filename.startswith(f"{base_name}_总结_") and sum_filename.endswith(".md"):
+                        if sum_filename.startswith(f"{base_name}_总结") and sum_filename.endswith(".md"):
                             sum_status = '总结完成(已存在)'
                             sum_progress = '100%'
                             break
@@ -956,7 +956,7 @@ class AudioTranscriberGUI:
                 if os.path.exists(summary_dir):
                     # 查找匹配的总结文件
                     for filename in os.listdir(summary_dir):
-                        if filename.startswith(f"{base_name}_总结_") and filename.endswith(".md"):
+                        if filename.startswith(f"{base_name}_总结") and filename.endswith(".md"):
                             potential_file = os.path.join(summary_dir, filename)
                             try:
                                 with open(potential_file, 'r', encoding='utf-8') as f:
@@ -1036,7 +1036,7 @@ class AudioTranscriberGUI:
         
         if os.path.exists(summary_dir):
             for filename in os.listdir(summary_dir):
-                if filename.startswith(f"{base_name}_总结_") and filename.endswith(".md"):
+                if filename.startswith(f"{base_name}_总结") and filename.endswith(".md"):
                     summary_exists = True
                     break
         
@@ -1066,7 +1066,7 @@ class AudioTranscriberGUI:
         
         # 保存总结文本 - 修改为.md格式
         safe_base_name = sanitize_filename(base_name)
-        summary_file = os.path.normpath(os.path.join(summary_dir, f"{safe_base_name}_summary.md"))
+        summary_file = os.path.normpath(os.path.join(summary_dir, f"{safe_base_name}_总结.md"))
         with open(summary_file, 'w', encoding='utf-8') as f:
             # 使用Markdown格式
             f.write(f"# {base_name}\n\n")
@@ -1114,7 +1114,7 @@ class AudioTranscriberGUI:
         
         if os.path.exists(summary_dir):
             for filename in os.listdir(summary_dir):
-                if filename.startswith(f"{base_name}_总结_") and filename.endswith(".md"):
+                if filename.startswith(f"{base_name}_总结") and filename.endswith(".md"):
                     summary_exists = True
                     break
         
@@ -1304,7 +1304,7 @@ class AudioTranscriberGUI:
             
             # 保存总结文本 - 修改为.md格式
             safe_base_name = sanitize_filename(base_name)
-            summary_file = os.path.normpath(os.path.join(output_dir, f"{safe_base_name}_summary.md"))
+            summary_file = os.path.normpath(os.path.join(output_dir, f"{safe_base_name}_总结.md"))
             with open(summary_file, 'w', encoding='utf-8') as f:
                 # 使用Markdown格式
                 f.write(f"# {base_name}\n\n")
