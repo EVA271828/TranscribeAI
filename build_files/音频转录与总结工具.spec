@@ -2,7 +2,7 @@
 
 
 a = Analysis(
-    ['run_gui.py'],
+    ['main.py'],
     pathex=[],
     binaries=[],
     datas=[('src', 'src'), ('prompts', 'prompts')],

@@ -31,7 +31,7 @@ def build_exe():
     cmd = [
         sys.executable, "-m", "PyInstaller",
         "--name=音频转录与总结工具",
-        "--windowed",  # 使用GUI模式，不显示控制台窗口
+        "--windowed",  # 使用GUI模式，不显示控制台窗�?
         "--onefile",   # 打包成单个exe文件
         "--icon=NONE",  # 可以指定图标文件
         "--add-data=src;src",  # 包含src目录
@@ -47,7 +47,7 @@ def build_exe():
         "--hidden-import=transformers",
         "--hidden-import=requests",
         "--hidden-import=yaml",
-        "run_gui.py"
+        "main.py"
     ]
     
     try:
@@ -60,11 +60,11 @@ def build_exe():
         return False
 
 def create_portable_package():
-    """创建便携式包，包含必要的配置文件和目录"""
+    """创建便携式包，包含必要的配置文件和目�?""
     print("创建便携式包...")
     
     # 创建输出目录
-    portable_dir = "dist/音频转录与总结工具_便携版"
+    portable_dir = "dist/音频转录与总结工具_便携�?
     if os.path.exists(portable_dir):
         shutil.rmtree(portable_dir)
     os.makedirs(portable_dir)
@@ -72,7 +72,7 @@ def create_portable_package():
     # 复制exe文件
     shutil.copy("dist/音频转录与总结工具.exe", portable_dir)
     
-    # 复制必要的目录
+    # 复制必要的目�?
     if os.path.exists("prompts"):
         shutil.copytree("prompts", f"{portable_dir}/prompts")
     
@@ -86,7 +86,7 @@ def create_portable_package():
         shutil.copy("src/config/config.example.ini", f"{portable_dir}/config/config.ini")
     
     # 创建使用说明
-    readme_content = """# 音频转录与总结工具 - 便携版
+    readme_content = """# 音频转录与总结工具 - 便携�?
 
 ## 使用方法
 
@@ -94,7 +94,7 @@ def create_portable_package():
 2. 在界面中点击"浏览..."选择要转录的音频文件
 3. 输入DeepSeek API密钥
 4. 选择Whisper模型和总结模板
-5. 点击"开始转录"按钮
+5. 点击"开始转�?按钮
 6. 等待转录和总结完成
 7. 点击"保存结果"保存转录和总结内容
 
@@ -102,11 +102,11 @@ def create_portable_package():
 
 1. 首次使用需要输入DeepSeek API密钥
 2. 转录大文件可能需要较长时间，请耐心等待
-3. 转录结果将保存在output目录下
+3. 转录结果将保存在output目录�?
 
 ## 目录说明
 
-- prompts/: 提示词模板目录
+- prompts/: 提示词模板目�?
 - output/: 输出目录，包含转录文本和总结内容
 - config/: 配置文件目录
 """
@@ -117,16 +117,16 @@ def create_portable_package():
     print(f"便携式包创建成功: {os.path.abspath(portable_dir)}")
 
 def main():
-    """主函数"""
+    """主函�?""
     print("=== 音频转录与总结工具 - 打包脚本 ===")
     
     # 检查是否安装了PyInstaller
     try:
         subprocess.check_call([sys.executable, "-m", "PyInstaller", "--version"], 
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        print("检测到PyInstaller已安装")
+        print("检测到PyInstaller已安�?)
     except subprocess.CalledProcessError:
-        print("未检测到PyInstaller，正在安装...")
+        print("未检测到PyInstaller，正在安�?..")
         if not install_pyinstaller():
             return
     
@@ -134,11 +134,11 @@ def main():
     if build_exe():
         # 创建便携式包
         create_portable_package()
-        print("\n打包完成！")
+        print("\n打包完成�?)
         print(f"单文件exe: {os.path.abspath('dist/音频转录与总结工具.exe')}")
-        print(f"便携版目录: {os.path.abspath('dist/音频转录与总结工具_便携版')}")
+        print(f"便携版目�? {os.path.abspath('dist/音频转录与总结工具_便携�?)}")
     else:
-        print("打包失败！")
+        print("打包失败�?)
 
 if __name__ == "__main__":
     main()

@@ -8,7 +8,8 @@ import os
 import argparse
 
 # 添加项目根目录到Python路径
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(project_root)
 
 from src.core.audio_summarizer import main as cli_main
 from src.gui.main_gui import main as gui_main
