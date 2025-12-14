@@ -24,15 +24,32 @@
 ### 安装步骤
 
 1. 克隆或下载项目到本地
+
 2. 创建虚拟环境（推荐）：
    ```bash
    python -m venv .venv
    .venv\Scripts\activate  # Windows
    source .venv/bin/activate  # Linux/Mac
    ```
+
 3. 安装依赖：
+
+   3.1. Whisper
+
+   ​	基于PyTorch构建，需根据硬件环境选择对应版本：CPU环境用户直接执行：
+
    ```bash
-   pip install -r requirements.txt
+   pip install torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cpu
+   ```
+   ​	GPU用户需先确认CUDA版本（通过nvidia-smi命令），再从PyTorch官网(https://pytorch.org/get-started/locally/)获取匹配命令，示例如下：
+   ```
+   pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu130
+   ```
+
+   3.2.  安装其他依赖
+
+   ```java
+   /pip install -r requirements.txt
    ```
 
 ## 使用方法

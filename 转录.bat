@@ -1,1 +1,1 @@
-F:\project\my-project\PythonProject\.venv\Scripts\python.exe F:\project\my-project\PythonProject\scripts\main.py --gui
+F:\project\my-project\PythonProject\.venv\Scripts\python.exe F:\project\my-project\PythonProject\scripts\main.py

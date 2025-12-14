@@ -42,8 +42,8 @@ class AudioTranscriberGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("音频转录与总结工具")
-        self.root.geometry("900x700")
-        self.root.minsize(800, 600)
+        self.root.geometry("900x900")
+        self.root.minsize(800, 900)
         
         # 初始化配置管理器
         self.config = ConfigManager()
