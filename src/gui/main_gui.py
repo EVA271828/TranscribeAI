@@ -264,7 +264,7 @@ class AudioTranscriberGUI:
     def check_single_file_resume_status(self, audio_file):
         """检查单个文件的断点续传状态"""
         # 获取输出文件夹
-        output_folder = self.output_folder.get() or self.config_manager.get_output_folder()
+        output_folder = self.output_folder.get() or self.config.get_output_folder()
         transcript_dir = os.path.join(output_folder, 'transcripts')
         summary_dir = os.path.join(output_folder, 'summaries')
         
@@ -286,10 +286,18 @@ class AudioTranscriberGUI:
         # 检查总结文件
         if os.path.exists(summary_dir):
             for sum_filename in os.listdir(summary_dir):
-                if sum_filename.startswith(f"{base_name}_总结_") and sum_filename.endswith(".txt"):
-                    sum_status = '总结完成(已存在)'
-                    sum_progress = '100%'
-                    break
+                if sum_filename.startswith(f"{base_name}_总结_") and sum_filename.endswith(".md"):
+                    potential_file = os.path.join(summary_dir, sum_filename)
+                    try:
+                        with open(potential_file, 'r', encoding='utf-8') as f:
+                            content = f.read().strip()
+                        if content:
+                            summary = content
+                            sum_status = '总结完成(已存在)'
+                            sum_progress = '100%'
+                            break
+                    except Exception:
+                        continue
         
         # 更新状态显示
         status_text = f"文件状态: 转录{trans_status}, 总结{sum_status}"
@@ -324,7 +332,7 @@ class AudioTranscriberGUI:
         # 查找并加载总结文件
         if os.path.exists(summary_dir):
             for sum_filename in os.listdir(summary_dir):
-                if sum_filename.startswith(f"{base_name}_总结_") and sum_filename.endswith(".txt"):
+                if sum_filename.startswith(f"{base_name}_总结_") and sum_filename.endswith(".md"):
                     potential_file = os.path.join(summary_dir, sum_filename)
                     try:
                         with open(potential_file, 'r', encoding='utf-8') as f:
@@ -391,7 +399,7 @@ class AudioTranscriberGUI:
         audio_files = self.scan_audio_files(folder)
         
         # 获取输出文件夹
-        output_folder = self.output_folder.get() or self.config_manager.get_output_folder()
+        output_folder = self.output_folder.get() or self.config.get_output_folder()
         transcript_dir = os.path.join(output_folder, 'transcripts')
         summary_dir = os.path.join(output_folder, 'summaries')
         
@@ -431,7 +439,7 @@ class AudioTranscriberGUI:
                 
                 if os.path.exists(sum_subdir):
                     for sum_filename in os.listdir(sum_subdir):
-                        if sum_filename.startswith(f"{base_name}_总结_") and sum_filename.endswith(".txt"):
+                        if sum_filename.startswith(f"{base_name}_总结_") and sum_filename.endswith(".md"):
                             sum_status = '总结完成(已存在)'
                             sum_progress = '100%'
                             break
@@ -780,7 +788,7 @@ class AudioTranscriberGUI:
                 self.file_start_times[audio_file]['transcription'] = datetime.now()
                 
                 # 检查转录文件是否已存在
-                output_folder = self.output_folder.get() or self.config_manager.get_output_folder()
+                output_folder = self.output_folder.get() or self.config.get_output_folder()
                 base_name = os.path.splitext(os.path.basename(audio_file))[0]
                 
                 # 查找最新的转录文件
@@ -903,7 +911,7 @@ class AudioTranscriberGUI:
                 self.file_start_times[audio_file]['summary'] = datetime.now()
                 
                 # 检查总结文件是否已存在
-                output_folder = self.output_folder.get() or self.config_manager.get_output_folder()
+                output_folder = self.output_folder.get() or self.config.get_output_folder()
                 base_name = os.path.splitext(os.path.basename(audio_file))[0]
                 
                 # 获取输出文件夹
@@ -925,9 +933,8 @@ class AudioTranscriberGUI:
                 if os.path.exists(summary_dir):
                     # 查找匹配的总结文件
                     for filename in os.listdir(summary_dir):
-                        if filename.startswith(f"{base_name}_总结_") and filename.endswith(".txt"):
+                        if filename.startswith(f"{base_name}_总结_") and filename.endswith(".md"):
                             potential_file = os.path.join(summary_dir, filename)
-                            # 如果找到了文件，读取其内容
                             try:
                                 with open(potential_file, 'r', encoding='utf-8') as f:
                                     summary = f.read().strip()
@@ -945,7 +952,7 @@ class AudioTranscriberGUI:
                     if self.is_folder_mode.get():
                         self._save_batch_result(audio_file, rel_path, transcription, summary, transcript_file)
                     else:
-                        self._display_single_result(audio_file, transcription, summary, transcript_file)
+                        self._display_single_result(audio_file, transcription, summary, transcript_file, rel_path)
                 else:
                     # 需要进行总结
                     # 更新状态
@@ -960,7 +967,7 @@ class AudioTranscriberGUI:
                     if self.is_folder_mode.get():
                         self._save_batch_result(audio_file, rel_path, transcription, summary, transcript_file)
                     else:
-                        self._display_single_result(audio_file, transcription, summary, transcript_file)
+                        self._display_single_result(audio_file, transcription, summary, transcript_file, rel_path)
                 
                 # 从线程池中移除当前线程
                 try:
@@ -1006,13 +1013,13 @@ class AudioTranscriberGUI:
         
         if os.path.exists(summary_dir):
             for filename in os.listdir(summary_dir):
-                if filename.startswith(f"{base_name}_总结_") and filename.endswith(".txt"):
+                if filename.startswith(f"{base_name}_总结_") and filename.endswith(".md"):
                     summary_exists = True
                     break
         
         if not summary_exists:
             # 只保存总结文件
-            summary_file = self._save_summary_only(audio_file, summary, output_folder)
+            summary_file = self._save_summary_only(audio_file, summary, output_folder, rel_path)
             status_text = f'完成 (转录:{os.path.basename(transcript_file) if transcript_file else "无"}, 总结:{os.path.basename(summary_file)})'
         else:
             # 总结文件已存在
@@ -1034,11 +1041,14 @@ class AudioTranscriberGUI:
             if rel_dir:
                 summary_dir = os.path.normpath(os.path.join(summary_dir, rel_dir))
         
-        summary_file = os.path.normpath(os.path.join(summary_dir, f"{base_name}_总结_{timestamp}.txt"))
-        
-        # 确保目录存在
-        os.makedirs(summary_dir, exist_ok=True)
+        # 保存总结文本 - 修改为.md格式
+        summary_file = os.path.normpath(os.path.join(summary_dir, f"{base_name}_summary.md"))
         with open(summary_file, 'w', encoding='utf-8') as f:
+            # 使用Markdown格式
+            f.write(f"# {base_name}\n\n")
+            f.write(f"**音频文件:** {audio_file}\n\n")
+            f.write(f"**处理时间:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            f.write("## 总结内容\n\n")
             f.write(summary)
         
         # 更新进度字典中的文件状态
@@ -1057,7 +1067,7 @@ class AudioTranscriberGUI:
         
         return summary_file
     
-    def _display_single_result(self, audio_file, transcription, summary, transcript_file):
+    def _display_single_result(self, audio_file, transcription, summary, transcript_file, rel_path=None):
         """显示单文件结果"""
         # 在文件夹模式下清空结果，单文件模式下不清空（支持断点续传）
         if self.is_folder_mode.get():
@@ -1080,13 +1090,13 @@ class AudioTranscriberGUI:
         
         if os.path.exists(summary_dir):
             for filename in os.listdir(summary_dir):
-                if filename.startswith(f"{base_name}_总结_") and filename.endswith(".txt"):
+                if filename.startswith(f"{base_name}_总结_") and filename.endswith(".md"):
                     summary_exists = True
                     break
         
         if not summary_exists:
             # 保存总结文件
-            self._save_summary_only(audio_file, summary, rel_path)
+            self._save_summary_only(audio_file, summary, output_folder, rel_path)
             self.root.after(0, lambda: self.status_var.set(f"转录已保存到: {transcript_file}, 总结已保存"))
         else:
             self.root.after(0, lambda: self.status_var.set(f"转录已保存到: {transcript_file}, 总结已存在"))
@@ -1238,9 +1248,14 @@ class AudioTranscriberGUI:
             with open(transcript_file, 'w', encoding='utf-8') as f:
                 f.write(transcription)
             
-            # 保存总结文本
-            summary_file = os.path.normpath(os.path.join(output_dir, f"{base_name}_summary.txt"))
+            # 保存总结文本 - 修改为.md格式
+            summary_file = os.path.normpath(os.path.join(output_dir, f"{base_name}_summary.md"))
             with open(summary_file, 'w', encoding='utf-8') as f:
+                # 使用Markdown格式
+                f.write(f"# {base_name}\n\n")
+                f.write(f"**音频文件:** {file_path}\n\n")
+                f.write(f"**处理时间:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+                f.write("## 总结内容\n\n")
                 f.write(summary)
             
             messagebox.showinfo("保存成功", f"结果已保存:\n转录: {transcript_file}\n总结: {summary_file}")
