@@ -136,8 +136,15 @@ def main():
     print(f"初始化Whisper转录器，模型: {model_path}")
     transcriber = WhisperTranscriber(model_path)
     
+    # 如果prompts_dir是相对路径，则转换为绝对路径
+    if not os.path.isabs(args.prompts_dir):
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        prompts_dir = os.path.join(project_root, args.prompts_dir)
+    else:
+        prompts_dir = args.prompts_dir
+    
     print(f"初始化DeepSeek总结器，模板: {args.template}")
-    summarizer = DeepSeekSummarizer(api_key, args.prompts_dir)
+    summarizer = DeepSeekSummarizer(api_key, prompts_dir)
     
     # 扫描音频文件
     print(f"扫描源文件夹: {args.source_folder}")

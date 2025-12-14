@@ -79,7 +79,7 @@ def main(output_folder=None):
 
     # 如果没有提供音频文件参数，则使用默认值
     if args.audio is None:
-        audio_file = "F:\project\my-project\PythonProject\AI可以取代我，那我的意义是？_哔哩哔哩_bilibili.mp3"
+        audio_file = r"F:\project\my-project\PythonProject\AI可以取代我，那我的意义是？_哔哩哔哩_bilibili.mp3"
     else:
         audio_file = args.audio
 
@@ -111,7 +111,14 @@ def main(output_folder=None):
     transcriber = WhisperTranscriber(model_path)
     
     # 初始化DeepSeek总结器
-    summarizer = DeepSeekSummarizer(api_key, args.prompts_dir)
+    # 如果prompts_dir是相对路径，则转换为绝对路径
+    if not os.path.isabs(args.prompts_dir):
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        prompts_dir = os.path.join(project_root, args.prompts_dir)
+    else:
+        prompts_dir = args.prompts_dir
+    
+    summarizer = DeepSeekSummarizer(api_key, prompts_dir)
     
     # 获取音频标题
     audio_title = FileUtils.get_audio_title(audio_file)

@@ -734,7 +734,10 @@ class AudioTranscriberGUI:
             
             # 初始化转录器和总结器
             self.transcriber = WhisperTranscriber(self.model_var.get())
-            self.summarizer = DeepSeekSummarizer(self.api_key.get(), "prompts")
+            # 使用绝对路径指向prompts目录
+            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            prompts_dir = os.path.join(project_root, "prompts")
+            self.summarizer = DeepSeekSummarizer(self.api_key.get(), prompts_dir)
             
             # 根据模式选择处理方式
             if self.is_folder_mode.get():
