@@ -30,6 +30,9 @@ class FileUtils:
         if not os.path.isabs(output_folder):
             output_folder = os.path.join(project_root, output_folder)
         
+        # 确保输出文件夹存在
+        os.makedirs(output_folder, exist_ok=True)
+        
         # 生成输出文件名
         audio_name = os.path.splitext(os.path.basename(audio_file))[0]
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -41,7 +44,16 @@ class FileUtils:
             rel_dir = os.path.dirname(rel_path)
             if rel_dir:
                 transcript_dir = os.path.join(transcript_dir, rel_dir)
-        os.makedirs(transcript_dir, exist_ok=True)
+        
+        # 确保转录目录存在
+        try:
+            os.makedirs(transcript_dir, exist_ok=True)
+        except Exception as e:
+            print(f"创建转录目录失败: {transcript_dir}, 错误: {e}")
+            # 如果创建子目录失败，回退到基础目录
+            transcript_dir = os.path.join(output_folder, 'transcripts')
+            os.makedirs(transcript_dir, exist_ok=True)
+            
         transcript_file = os.path.join(transcript_dir, f"{audio_name}_转录_{timestamp}.txt")
         
         # 总结文件路径和名称
@@ -51,7 +63,16 @@ class FileUtils:
             rel_dir = os.path.dirname(rel_path)
             if rel_dir:
                 summary_dir = os.path.join(summary_dir, rel_dir)
-        os.makedirs(summary_dir, exist_ok=True)
+        
+        # 确保总结目录存在
+        try:
+            os.makedirs(summary_dir, exist_ok=True)
+        except Exception as e:
+            print(f"创建总结目录失败: {summary_dir}, 错误: {e}")
+            # 如果创建子目录失败，回退到基础目录
+            summary_dir = os.path.join(output_folder, 'summaries')
+            os.makedirs(summary_dir, exist_ok=True)
+            
         summary_file = os.path.join(summary_dir, f"{audio_name}_总结_{timestamp}.md")
         
         # 保存转录文本到txt文件

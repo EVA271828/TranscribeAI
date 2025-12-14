@@ -17,6 +17,16 @@ class DeepSeekSummarizer:
         self.api_key = api_key
         self.api_url = "https://api.deepseek.com/chat/completions"
         self.prompts_dir = prompts_dir
+        self._stop_flag = False
+    
+    def stop(self):
+        """设置停止标志，用于中断长时间运行的总结"""
+        self._stop_flag = True
+        print("收到停止信号，正在中断总结...")
+    
+    def reset_stop_flag(self):
+        """重置停止标志"""
+        self._stop_flag = False
     
     def load_prompt_template(self, template_name):
         """
@@ -103,9 +113,19 @@ class DeepSeekSummarizer:
         print("正在调用DeepSeek API进行内容总结...")
         start_time = time.time()
         
+        # 在发送请求前检查停止标志
+        if self._stop_flag:
+            print("总结被用户中断")
+            return ""
+        
         try:
-            response = requests.post(self.api_url, headers=headers, data=payload)
+            response = requests.post(self.api_url, headers=headers, data=payload, timeout=60)
             response.raise_for_status()
+            
+            # 检查是否在请求过程中被中断
+            if self._stop_flag:
+                print("总结被用户中断")
+                return ""
             
             print(f"API调用耗时: {time.time() - start_time:.2f}秒")
             

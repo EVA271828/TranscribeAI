@@ -17,18 +17,32 @@ class WhisperTranscriber:
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model_name = model_name
         self.model = None
+        self._stop_flag = False
         print(f"设备设置为使用 {self.device}")
     
-    def load_model(self):
+    def stop(self):
+        """设置停止标志，用于中断长时间运行的转录"""
+        self._stop_flag = True
+        print("收到停止信号，正在中断转录...")
+    
+    def reset_stop_flag(self):
+        """重置停止标志"""
+        self._stop_flag = False
+    
+    def load_model(self, status_callback=None):
         """加载Whisper模型"""
         if self.model is None:
             print(f"正在加载模型: {self.model_name}")
+            if status_callback:
+                status_callback(f"正在加载Whisper模型({self.model_name})...")
             start_time = time.time()
             self.model = whisper.load_model(self.model_name, device=self.device)
             print(f"模型加载耗时: {time.time() - start_time:.2f}秒")
+            if status_callback:
+                status_callback(f"模型加载完成，耗时{time.time() - start_time:.2f}秒")
         return self.model
     
-    def transcribe(self, audio_file, language="zh", verbose=True, progress_callback=None):
+    def transcribe(self, audio_file, language="zh", verbose=True, progress_callback=None, status_callback=None):
         """
         转录音频文件
         
@@ -37,6 +51,7 @@ class WhisperTranscriber:
             language (str): 语言代码，默认为中文(zh)
             verbose (bool): 是否显示详细进度信息，默认为True
             progress_callback (callable): 进度回调函数，接收当前进度百分比作为参数
+            status_callback (callable): 状态回调函数，接收状态文本作为参数
             
         Returns:
             str: 转录的文本
@@ -44,9 +59,11 @@ class WhisperTranscriber:
         if not os.path.exists(audio_file):
             raise FileNotFoundError(f"音频文件 '{audio_file}' 不存在")
         
-        model = self.load_model()
+        model = self.load_model(status_callback)
         
         print(f"正在处理音频文件: {audio_file}")
+        if status_callback:
+            status_callback(f"正在处理音频文件: {os.path.basename(audio_file)}")
         start_time = time.time()
         
         # 如果提供了进度回调函数，则使用自定义的verbose函数
@@ -108,6 +125,11 @@ class WhisperTranscriber:
             builtins.print = custom_print
             
             try:
+                # 在转录前检查停止标志
+                if self._stop_flag:
+                    print("转录被用户中断")
+                    return ""
+                    
                 result = model.transcribe(
                     audio_file,
                     language=language,
@@ -116,11 +138,22 @@ class WhisperTranscriber:
                     initial_prompt="以下是简体中文：",
                     verbose=verbose
                 )
+                
+                # 转录完成后检查是否被中断
+                if self._stop_flag:
+                    print("转录被用户中断")
+                    return ""
+                    
             finally:
                 # 恢复原始print函数
                 builtins.print = original_print
         else:
             # 没有提供进度回调，使用标准方式
+            # 在转录前检查停止标志
+            if self._stop_flag:
+                print("转录被用户中断")
+                return ""
+                
             result = model.transcribe(
                 audio_file,
                 language=language,
@@ -129,6 +162,11 @@ class WhisperTranscriber:
                 initial_prompt="以下是简体中文：",
                 verbose=verbose
             )
+            
+            # 转录完成后检查是否被中断
+            if self._stop_flag:
+                print("转录被用户中断")
+                return ""
         
         print(f"转录耗时: {time.time() - start_time:.2f}秒")
         print(f"转录完成，文本长度: {len(result['text'])}字符")

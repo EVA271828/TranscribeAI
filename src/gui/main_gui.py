@@ -13,12 +13,27 @@ from tkinter.font import Font
 from datetime import datetime
 
 # 添加项目根目录到Python路径
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(project_root)
 
 from src.core.whisper_transcriber import WhisperTranscriber
 from src.core.deepseek_summarizer import DeepSeekSummarizer
 from src.utils.file_utils import FileUtils
 from src.config.config_manager import ConfigManager
+
+
+def sanitize_filename(filename):
+    """清理文件名，移除或替换不安全的字符"""
+    import re
+    # 移除或替换不安全的字符
+    filename = re.sub(r'[<>:"/\\|?*]', '_', filename)
+    # 移除控制字符
+    filename = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', filename)
+    # 限制长度
+    if len(filename) > 200:
+        name, ext = os.path.splitext(filename)
+        filename = name[:200] + ext
+    return filename
 
 
 class AudioTranscriberGUI:
@@ -747,6 +762,9 @@ class AudioTranscriberGUI:
             prompts_dir = os.path.join(project_root, "prompts")
             self.summarizer = DeepSeekSummarizer(self.api_key.get(), prompts_dir)
             
+            # 更新状态栏，表示模型初始化完成
+            self.root.after(0, lambda: self.status_var.set("模型初始化完成，准备开始转录..."))
+            
             # 根据模式选择处理方式
             if self.is_folder_mode.get():
                 # 文件夹模式 - 批量处理
@@ -840,9 +858,14 @@ class AudioTranscriberGUI:
                         self.root.after(0, self.update_file_progress, audio_file, '转录中', progress, "transcription")
                     
                     # 转录音频
+                    def status_callback(status):
+                        # 更新状态栏
+                        self.root.after(0, self.status_var.set, status)
+                    
                     transcription = self.transcriber.transcribe(
                         audio_file, 
-                        progress_callback=progress_callback
+                        progress_callback=progress_callback,
+                        status_callback=status_callback
                     )
                     
                     # 立即保存转录文件
@@ -863,7 +886,7 @@ class AudioTranscriberGUI:
                     os.makedirs(transcript_dir, exist_ok=True)
                     
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    transcript_file = os.path.join(transcript_dir, f"{base_name}_转录_{timestamp}.txt")
+                    transcript_file = os.path.join(transcript_dir, f"{safe_base_name}_转录_{timestamp}.txt")
                     
                     # 保存转录文本
                     with open(transcript_file, 'w', encoding='utf-8') as f:
@@ -1042,7 +1065,8 @@ class AudioTranscriberGUI:
                 summary_dir = os.path.normpath(os.path.join(summary_dir, rel_dir))
         
         # 保存总结文本 - 修改为.md格式
-        summary_file = os.path.normpath(os.path.join(summary_dir, f"{base_name}_summary.md"))
+        safe_base_name = sanitize_filename(base_name)
+        summary_file = os.path.normpath(os.path.join(summary_dir, f"{safe_base_name}_summary.md"))
         with open(summary_file, 'w', encoding='utf-8') as f:
             # 使用Markdown格式
             f.write(f"# {base_name}\n\n")
@@ -1153,13 +1177,22 @@ class AudioTranscriberGUI:
         self.status_var.set("正在停止...")
         self.stop_button.config(state=tk.DISABLED)
         
-        # 等待所有线程结束
-        if self.transcription_thread and self.transcription_thread.is_alive():
-            self.transcription_thread.join(timeout=1)
+        # 通知转录器停止（如果支持）
+        if self.transcriber and hasattr(self.transcriber, 'stop'):
+            self.transcriber.stop()
+            
+        # 通知总结器停止（如果支持）
+        if self.summarizer and hasattr(self.summarizer, 'stop'):
+            self.summarizer.stop()
         
+        # 等待所有线程结束，增加超时时间
+        if self.transcription_thread and self.transcription_thread.is_alive():
+            self.transcription_thread.join(timeout=5)
+        
+        # 等待所有总结线程结束，增加超时时间
         for thread in self.summary_threads:
             if thread.is_alive():
-                thread.join(timeout=1)
+                thread.join(timeout=5)
         
         # 清空队列
         while not self.transcription_queue.empty():
@@ -1167,7 +1200,7 @@ class AudioTranscriberGUI:
                 self.transcription_queue.get_nowait()
             except queue.Empty:
                 break
-        
+                
         while not self.summary_queue.empty():
             try:
                 self.summary_queue.get_nowait()
@@ -1175,9 +1208,29 @@ class AudioTranscriberGUI:
                 break
         
         # 重置状态
+        self.stop_threads = False
+        self.transcription_thread = None
+        self.summary_threads = []
+        self.active_summary_threads = 0
+        
+        # 重置转录器和总结器的停止标志
+        if self.transcriber and hasattr(self.transcriber, 'reset_stop_flag'):
+            self.transcriber.reset_stop_flag()
+            
+        if self.summarizer and hasattr(self.summarizer, 'reset_stop_flag'):
+            self.summarizer.reset_stop_flag()
+        
+        # 更新UI状态
         self.status_var.set("已停止")
         self.start_button.config(state=tk.NORMAL)
         self.stop_button.config(state=tk.DISABLED)
+        
+        # 更新所有未完成文件的状态为"已停止"
+        for file_path, progress_info in self.file_progress.items():
+            if progress_info['trans_progress'] < 100:
+                self.update_file_progress(file_path, '已停止', 0, "transcription")
+            if progress_info['sum_progress'] < 100:
+                self.update_file_progress(file_path, '已停止', 0, "summary")
         
         # 重置线程相关变量
         self.transcription_thread = None
@@ -1244,12 +1297,14 @@ class AudioTranscriberGUI:
             base_name = os.path.splitext(os.path.basename(file_path))[0]
             
             # 保存转录文本
-            transcript_file = os.path.normpath(os.path.join(output_dir, f"{base_name}_transcript.txt"))
+            safe_base_name = sanitize_filename(base_name)
+            transcript_file = os.path.normpath(os.path.join(output_dir, f"{safe_base_name}_transcript.txt"))
             with open(transcript_file, 'w', encoding='utf-8') as f:
                 f.write(transcription)
             
             # 保存总结文本 - 修改为.md格式
-            summary_file = os.path.normpath(os.path.join(output_dir, f"{base_name}_summary.md"))
+            safe_base_name = sanitize_filename(base_name)
+            summary_file = os.path.normpath(os.path.join(output_dir, f"{safe_base_name}_summary.md"))
             with open(summary_file, 'w', encoding='utf-8') as f:
                 # 使用Markdown格式
                 f.write(f"# {base_name}\n\n")
