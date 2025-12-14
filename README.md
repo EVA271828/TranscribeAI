@@ -6,30 +6,36 @@
 
 ```
 PythonProject/
-├── main.py                     # 主入口文件
-├── run_gui.py                  # GUI启动脚本
+├── scripts/                    # 主要脚本文件
+│   ├── batch_process.py        # 批处理脚本
+│   ├── extract_audio_from_video.py # 音频提取脚本
+│   ├── extract_audio_gui.py    # 音频提取GUI
+│   ├── main.py                 # 主入口文件
+│   ├── run_gui.py              # GUI启动脚本
+│   └── whisper_utils.py        # Whisper工具函数
 ├── src/                        # 源代码目录
 │   ├── core/                   # 核心功能模块
-│   │   ├── audio_summarizer.py # 主程序逻辑
-│   │   ├── whisper_transcriber.py # Whisper语音识别
-│   │   └── deepseek_summarizer.py # DeepSeek API总结
 │   ├── gui/                    # 图形界面模块
-│   │   └── main_gui.py         # GUI主程序
 │   ├── utils/                  # 工具模块
-│   │   └── file_utils.py       # 文件操作工具
 │   └── config/                 # 配置模块
-│       ├── config_manager.py   # 配置管理器
-│       ├── config.ini          # 配置文件
-│       └── config.example.ini  # 配置文件示例
+├── batch_scripts/              # 批处理脚本
+│   ├── extract_audio.bat       # 音频提取批处理
+│   ├── 转录.bat               # 转录批处理
+│   └── 启动音频提取工具.bat    # 启动音频提取工具
+├── build_files/                # 编译相关文件
+│   ├── build_exe.py            # 打包脚本
+│   └── 音频转录与总结工具.spec   # PyInstaller配置
+├── config/                     # 配置文件
+│   ├── .gitignore              # Git忽略文件
+│   └── requirements.txt        # 依赖包列表
+├── docs/                       # 文档文件
+│   ├── README.md               # 项目说明
+│   ├── README_audio_extraction.md # 音频提取说明
+│   └── WHISPER_PROGRESS.md     # Whisper进度说明
 ├── prompts/                    # 提示词模板目录
-│   ├── audio_content_analysis.txt
-│   ├── course_analysis.txt
-│   ├── meeting_analysis.txt
-│   └── text_summary.txt
 ├── output/                     # 输出目录
-│   ├── transcripts/            # 转录文本(txt格式)
-│   └── summaries/              # 总结内容(md格式)
-└── requirements.txt            # 依赖包列表
+├── dist/                       # 打包输出目录
+└── .venv/                      # 虚拟环境
 ```
 
 ## 功能特点
@@ -40,131 +46,40 @@ PythonProject/
 4. **多种模板**: 提供多种提示词模板，适应不同场景
 5. **配置管理**: 支持保存API密钥和默认设置
 6. **图形界面**: 提供友好的GUI界面，方便用户操作
+7. **批处理功能**: 支持批量处理多个音频文件
+8. **音频提取**: 支持从视频文件中提取音频
 
 ## 使用方法
 
 ### 图形界面模式（推荐）
 
 ```bash
-# 方法1：直接运行GUI脚本
-python run_gui.py
-
-# 方法2：通过主程序启动GUI
-python main.py --gui
+# 启动GUI界面
+python scripts/run_gui.py
 ```
-
-图形界面功能：
-- 可视化选择音频文件
-- 直观选择Whisper模型和总结模板
-- 实时显示转录和总结进度
-- 内置配置管理界面
 
 ### 命令行模式
 
 ```bash
 # 基本使用
-python main.py
+python scripts/main.py
 
-# 指定模型
-python main.py --model tiny
+# 批量处理
+python scripts/batch_process.py --source_folder 音频文件夹路径 --output 输出文件夹路径
 
-# 指定音频文件
-python main.py --audio your_audio.mp3
-
-# 指定API密钥
-python main.py --api_key YOUR_API_KEY
-
-# 指定模板
-python main.py --template text_summary
-
-# 进入配置模式
-python main.py --config
+# 音频提取
+python scripts/extract_audio_from_video.py 源文件夹路径 目标文件夹路径
 ```
-
-## 输出文件
-
-- **转录文本**: 保存在 `output/transcripts/` 目录下，文件名格式为 `{音频名称}_转录_{时间戳}.txt`
-- **总结内容**: 保存在 `output/summaries/` 目录下，文件名格式为 `{音频名称}_总结_{时间戳}.md`
-
-## 配置
-
-首次运行时，建议使用 `--config` 参数进入配置模式，设置API密钥和默认选项。
 
 ## 依赖安装
 
 ```bash
-pip install -r requirements.txt
+pip install -r config/requirements.txt
 ```
 
-### 默认设置
-- `default_model`: 默认使用的Whisper模型（tiny/base/small/medium/large）
-- `default_template`: 默认使用的提示词模板
+## 注意事项
 
-### 配置文件格式
-```ini
-[api]
-api_key = YOUR_DEEPSEEK_API_KEY_HERE
-
-[settings]
-default_model = small
-default_template = audio_content_analysis
-```
-
-### 安全注意事项
-1. 请勿将包含真实API密钥的`config.ini`文件提交到公共代码仓库
-2. 建议将`config.ini`添加到`.gitignore`文件中
-3. API密钥在配置文件中以明文存储，请确保文件安全
-
-### FileUtils 类
-
-负责文件操作，主要方法：
-- `save_results(transcription, summary, audio_file)`: 保存转录和总结结果
-- `check_file_exists(file_path)`: 检查文件是否存在
-- `get_audio_title(audio_file)`: 从音频文件路径获取标题
-
-## 提示词模板系统
-
-### 模板类型
-
-1. **audio_content_analysis**：音频内容深度分析与大纲生成
-   - 适用于：讲座、演讲、播客等音频内容
-   - 输出：综合摘要、详尽内容大纲、结论与行动项
-
-2. **text_summary**：通用文本摘要生成
-   - 适用于：文章、报告、文档等文本内容
-   - 输出：文本摘要、关键要点、结论
-
-3. **meeting_analysis**：会议记录分析
-   - 适用于：会议记录、讨论内容
-   - 输出：会议概述、讨论要点、决策与行动项、后续跟进
-
-4. **course_analysis**：课程内容分析
-   - 适用于：课程、讲座、培训等教学内容
-   - 输出：课程概述、知识点梳理、重点与难点、实践应用、学习建议
-
-### 自定义模板
-
-用户可以创建自定义的提示词模板：
-
-1. 在`prompts`目录下创建新的`.txt`文件
-2. 使用`{变量名}`格式定义可替换的变量
-3. 使用`--template`参数指定新模板
-
-#### 示例：创建自定义模板
-
-1. 创建文件 `prompts/custom_analysis.txt`
-2. 编写模板内容，使用变量如 `{title}`、`{content}` 等
-3. 使用命令：`python audio_summarizer.py --template custom_analysis`
-
-### 模板变量
-
-不同模板支持的变量可能不同，常见的变量包括：
-- `{audio_title}`：音频标题
-- `{content}`：文本内容
-- `{title}`：通用标题
-- `{meeting_title}`：会议主题
-- `{meeting_time}`：会议时间
-- `{attendees}`：参会人员
-- `{course_title}`：课程标题
-- `{instructor}`：讲师
-- `{duration}`：时长
+- 使用前请确保已安装所有依赖包
+- 音频提取功能需要安装FFmpeg
+- 批处理功能需要配置API密钥
+- 详细的文档请参考docs文件夹中的相关文档
