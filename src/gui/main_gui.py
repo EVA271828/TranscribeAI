@@ -886,6 +886,7 @@ class AudioTranscriberGUI:
                     os.makedirs(transcript_dir, exist_ok=True)
                     
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    safe_base_name = sanitize_filename(base_name)
                     transcript_file = os.path.join(transcript_dir, f"{safe_base_name}_转录_{timestamp}.txt")
                     
                     # 保存转录文本
