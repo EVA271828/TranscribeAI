@@ -1065,6 +1065,9 @@ class AudioTranscriberGUI:
             if rel_dir:
                 summary_dir = os.path.normpath(os.path.join(summary_dir, rel_dir))
         
+        # 确保目录存在
+        os.makedirs(summary_dir, exist_ok=True)
+        
         # 保存总结文本 - 修改为.md格式
         safe_base_name = sanitize_filename(base_name)
         summary_file = os.path.normpath(os.path.join(summary_dir, f"{safe_base_name}_总结.md"))
