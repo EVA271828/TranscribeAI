@@ -11,6 +11,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 from tkinter.font import Font
 from datetime import datetime
+from io import StringIO
 
 # 添加项目根目录到Python路径
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -20,6 +21,39 @@ from src.core.whisper_transcriber import WhisperTranscriber
 from src.core.deepseek_summarizer import DeepSeekSummarizer
 from src.utils.file_utils import FileUtils
 from src.config.config_manager import ConfigManager
+
+
+class StreamRedirector:
+    """重定向标准输出和错误输出到GUI日志"""
+
+    def __init__(self, widget, level="INFO"):
+        """初始化重定向器
+        widget: GUI的add_log方法
+        level: 日志级别
+        """
+        self.widget = widget
+        self.level = level
+        self.original_stdout = sys.stdout
+        self.original_stderr = sys.stderr
+
+    def write(self, text):
+        """重定向write方法"""
+        if text.strip():  # 只写入非空文本
+            self.widget(text.strip(), self.level)
+
+    def flush(self):
+        """重定向flush方法"""
+        pass
+
+    def redirect(self):
+        """开始重定向"""
+        sys.stdout = self
+        sys.stderr = StreamRedirector(self.widget, "ERROR")
+
+    def restore(self):
+        """恢复原始输出"""
+        sys.stdout = self.original_stdout
+        sys.stderr = self.original_stderr
 
 
 def sanitize_filename(filename):
@@ -84,10 +118,14 @@ class AudioTranscriberGUI:
         
         # 计时相关变量
         self.file_start_times = {}  # 存储每个文件的处理开始时间 {文件路径: {'transcription': 时间, 'summary': 时间}}
-        
+
         # 设置界面
         self.setup_ui()
         self.load_config()
+
+        # 重定向控制台输出到日志区域
+        self.stream_redirector = StreamRedirector(self.add_log)
+        self.stream_redirector.redirect()
     
     def setup_ui(self):
         """设置用户界面"""
@@ -108,15 +146,15 @@ class AudioTranscriberGUI:
         settings_tab = ttk.Frame(notebook)
         notebook.add(settings_tab, text="设置")
         
-        # 结果选项卡
-        results_tab = ttk.Frame(notebook)
-        notebook.add(results_tab, text="结果")
+        # 模板管理选项卡
+        templates_tab = ttk.Frame(notebook)
+        notebook.add(templates_tab, text="模板管理")
         
         # 设置选项卡内容
         self.setup_settings_tab(settings_tab)
         
-        # 结果选项卡内容
-        self.setup_results_tab(results_tab)
+        # 模板管理选项卡内容
+        self.setup_templates_tab(templates_tab)
         
         # 底部按钮
         button_frame = ttk.Frame(main_frame)
@@ -199,7 +237,7 @@ class AudioTranscriberGUI:
         model_combo.pack(side=tk.LEFT)
         model_combo.current(2)  # 默认选择"small"
         
-        model_info = ttk.Label(model_frame, text="tiny(最快) ← → large(最准确)", foreground="gray")
+        model_info = ttk.Label(model_frame, text="tiny(最快) ← → large(最准确),推荐使用small", foreground="gray")
         model_info.pack(side=tk.LEFT, padx=(10, 0))
         
         # API密钥
@@ -230,26 +268,376 @@ class AudioTranscriberGUI:
         
         ttk.Entry(output_frame, textvariable=self.output_folder, width=70).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
         ttk.Button(output_frame, text="浏览...", command=self.browse_output_folder).pack(side=tk.RIGHT)
+
+        # 日志输出区域
+        log_frame = ttk.LabelFrame(parent, text="输出日志", padding="10")
+        log_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
+
+        # 日志文本框
+        self.log_text = scrolledtext.ScrolledText(log_frame, wrap=tk.WORD, height=15, font=("Consolas", 9))
+        self.log_text.pack(fill=tk.BOTH, expand=True)
+
+        # 为日志文本框添加标签用于区分不同类型的日志
+        self.log_text.tag_config("INFO", foreground="blue")
+        self.log_text.tag_config("SUCCESS", foreground="green")
+        self.log_text.tag_config("WARNING", foreground="orange")
+        self.log_text.tag_config("ERROR", foreground="red")
+        self.log_text.tag_config("TIMESTAMP", foreground="gray")
+
+        # 清空日志按钮
+        log_button_frame = ttk.Frame(log_frame)
+        log_button_frame.pack(fill=tk.X, pady=(5, 0))
+        ttk.Button(log_button_frame, text="清空日志", command=self.clear_log).pack(side=tk.RIGHT)
+
+    def add_log(self, message, level="INFO"):
+        """添加日志信息
+        level: INFO, SUCCESS, WARNING, ERROR
+        """
+        import time
+        timestamp = time.strftime("%H:%M:%S")
+        self.log_text.config(state=tk.NORMAL)
+        self.log_text.insert(tk.END, f"[{timestamp}] ", "TIMESTAMP")
+        self.log_text.insert(tk.END, f"[{level}] ", level)
+        self.log_text.insert(tk.END, message + "\n")
+        self.log_text.see(tk.END)  # 自动滚动到底部
+        self.log_text.config(state=tk.DISABLED)
+
+    def clear_log(self):
+        """清空日志"""
+        self.log_text.config(state=tk.NORMAL)
+        self.log_text.delete(1.0, tk.END)
+        self.log_text.config(state=tk.DISABLED)
     
-    def setup_results_tab(self, parent):
-        """结果选项卡"""
-        # 创建PanedWindow
-        paned = ttk.PanedWindow(parent, orient=tk.VERTICAL)
+    def setup_templates_tab(self, parent):
+        """模板管理选项卡"""
+        # 获取prompts目录路径
+        self.prompts_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            "prompts"
+        )
+
+        # 创建PanedWindow（左右分割）
+        paned = ttk.PanedWindow(parent, orient=tk.HORIZONTAL)
         paned.pack(fill=tk.BOTH, expand=True)
-        
-        # 转录结果
-        trans_frame = ttk.LabelFrame(paned, text="转录结果", padding="10")
-        paned.add(trans_frame, weight=1)
-        
-        self.transcription_text = scrolledtext.ScrolledText(trans_frame, wrap=tk.WORD, height=10)
-        self.transcription_text.pack(fill=tk.BOTH, expand=True)
-        
-        # 总结结果
-        summary_frame = ttk.LabelFrame(paned, text="总结结果", padding="10")
-        paned.add(summary_frame, weight=1)
-        
-        self.summary_text = scrolledtext.ScrolledText(summary_frame, wrap=tk.WORD, height=10)
-        self.summary_text.pack(fill=tk.BOTH, expand=True)
+
+        # 左侧：模板列表
+        list_frame = ttk.LabelFrame(paned, text="模板列表", padding="10")
+        paned.add(list_frame, weight=1)
+
+        # 创建Treeview显示模板列表
+        columns = ("模板名称", "描述")
+        self.templates_tree = ttk.Treeview(list_frame, columns=columns, show="tree headings", height=15)
+
+        # 设置列标题
+        self.templates_tree.heading("#0", text="")
+        self.templates_tree.heading("模板名称", text="模板名称")
+        self.templates_tree.heading("描述", text="描述")
+
+        # 设置列宽
+        self.templates_tree.column("#0", width=0, stretch=False)
+        self.templates_tree.column("模板名称", width=150, minwidth=120)
+        self.templates_tree.column("描述", width=150, minwidth=120)
+
+        # 添加滚动条
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.templates_tree.yview)
+        self.templates_tree.configure(yscrollcommand=scrollbar.set)
+
+        self.templates_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # 绑定选择事件
+        self.templates_tree.bind('<<TreeviewSelect>>', self.on_template_selected)
+
+        # 按钮区域
+        button_frame = ttk.Frame(list_frame)
+        button_frame.pack(fill=tk.X, pady=(10, 0))
+
+        ttk.Button(button_frame, text="新建模板", command=self.create_new_template).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(button_frame, text="删除模板", command=self.delete_template).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(button_frame, text="刷新列表", command=self.refresh_template_list).pack(side=tk.LEFT)
+
+        # 右侧：模板编辑器
+        editor_frame = ttk.LabelFrame(paned, text="模板编辑器", padding="10")
+        paned.add(editor_frame, weight=2)
+
+        # 模板名称输入
+        name_frame = ttk.Frame(editor_frame)
+        name_frame.pack(fill=tk.X, pady=(0, 10))
+
+        ttk.Label(name_frame, text="模板名称:").pack(side=tk.LEFT, padx=(0, 5))
+        self.template_name_entry = ttk.Entry(name_frame, width=30)
+        self.template_name_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        # 模板描述输入
+        desc_frame = ttk.Frame(editor_frame)
+        desc_frame.pack(fill=tk.X, pady=(0, 10))
+
+        ttk.Label(desc_frame, text="模板描述:").pack(side=tk.LEFT, padx=(0, 5))
+        self.template_desc_entry = ttk.Entry(desc_frame, width=50)
+        self.template_desc_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        # 模板内容编辑区域
+        ttk.Label(editor_frame, text="模板内容 (使用 {title}, {content} 等占位符):").pack(anchor=tk.W)
+        self.template_content_text = scrolledtext.ScrolledText(editor_frame, wrap=tk.WORD, height=20)
+        self.template_content_text.pack(fill=tk.BOTH, expand=True, pady=(5, 10))
+
+        # 按钮区域
+        button_frame = ttk.Frame(editor_frame)
+        button_frame.pack(fill=tk.X)
+
+        ttk.Button(button_frame, text="保存模板", command=self.save_template).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(button_frame, text="保存为", command=self.save_template_as).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(button_frame, text="清空", command=self.clear_template_editor).pack(side=tk.LEFT)
+
+        # 状态提示
+        self.template_status_var = tk.StringVar()
+        self.template_status_var.set("请选择一个模板或创建新模板")
+        status_label = ttk.Label(editor_frame, textvariable=self.template_status_var, foreground="gray")
+        status_label.pack(fill=tk.X, pady=(10, 0))
+
+        # 存储当前选择的模板
+        self.current_template = None
+
+        # 加载模板列表
+        self.refresh_template_list()
+
+    def get_template_description(self, template_name):
+        """获取模板描述"""
+        descriptions = {
+            "audio_content_analysis": "音频内容深度分析",
+            "text_summary": "通用文本摘要",
+            "meeting_analysis": "会议记录分析",
+            "course_analysis": "课程内容分析"
+        }
+        return descriptions.get(template_name, "自定义模板")
+
+    def refresh_template_list(self):
+        """刷新模板列表"""
+        # 清空列表
+        for item in self.templates_tree.get_children():
+            self.templates_tree.delete(item)
+
+        # 扫描prompts目录
+        if not os.path.exists(self.prompts_dir):
+            return
+
+        for filename in os.listdir(self.prompts_dir):
+            if filename.endswith('.txt'):
+                template_name = filename[:-4]  # 移除.txt扩展名
+                description = self.get_template_description(template_name)
+                self.templates_tree.insert('', 'end', values=(template_name, description))
+
+    def on_template_selected(self, event):
+        """当选择模板时触发"""
+        selection = self.templates_tree.selection()
+        if not selection:
+            return
+
+        item = selection[0]
+        values = self.templates_tree.item(item, 'values')
+        if not values:
+            return
+
+        template_name = values[0]
+        self.current_template = template_name
+
+        # 加载模板内容
+        template_file = os.path.join(self.prompts_dir, f"{template_name}.txt")
+        try:
+            with open(template_file, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            # 填充编辑器
+            self.template_name_entry.delete(0, tk.END)
+            self.template_name_entry.insert(0, template_name)
+            self.template_name_entry.config(state='readonly')  # 编辑时设为只读
+
+            self.template_desc_entry.delete(0, tk.END)
+            self.template_desc_entry.insert(0, self.get_template_description(template_name))
+
+            self.template_content_text.delete(1.0, tk.END)
+            self.template_content_text.insert(tk.END, content)
+
+            self.template_status_var.set(f"当前编辑模板: {template_name}")
+        except Exception as e:
+            messagebox.showerror("错误", f"加载模板失败: {str(e)}")
+
+    def create_new_template(self):
+        """创建新模板"""
+        self.current_template = None
+        self.template_name_entry.config(state='normal')
+        self.template_name_entry.delete(0, tk.END)
+        self.template_name_entry.insert(0, "新模板名称")
+        self.template_name_entry.select_range(0, tk.END)
+
+        self.template_desc_entry.delete(0, tk.END)
+        self.template_desc_entry.insert(0, "模板描述")
+
+        self.template_content_text.delete(1.0, tk.END)
+        self.template_content_text.insert(tk.END, """请按照以下结构进行总结：
+
+## 核心内容
+{content}
+
+## 关键要点
+列出3-5个最重要的要点
+
+## 结论
+总结主要启示""")
+
+        self.template_status_var.set("正在创建新模板")
+        self.template_name_entry.focus_set()
+
+    def save_template(self):
+        """保存模板"""
+        if not self.current_template:
+            messagebox.showwarning("警告", "没有选中的模板，请使用'保存为'创建新模板")
+            return
+
+        self._save_template_file(self.current_template)
+
+    def save_template_as(self):
+        """另存为模板"""
+        template_name = self.template_name_entry.get().strip()
+        if not template_name:
+            messagebox.showwarning("警告", "请输入模板名称")
+            return
+
+        # 验证模板名称
+        if not template_name.replace('_', '').replace('-', '').isalnum():
+            messagebox.showerror("错误", "模板名称只能包含字母、数字、下划线和连字符")
+            return
+
+        # 检查模板是否已存在
+        template_file = os.path.join(self.prompts_dir, f"{template_name}.txt")
+        if os.path.exists(template_file):
+            if not messagebox.askyesno("确认", f"模板 '{template_name}' 已存在，是否覆盖？"):
+                return
+
+        self._save_template_file(template_name)
+
+    def _save_template_file(self, template_name):
+        """保存模板文件（内部方法）"""
+        content = self.template_content_text.get(1.0, tk.END).strip()
+        if not content:
+            messagebox.showwarning("警告", "模板内容不能为空")
+            return
+
+        try:
+            # 确保prompts目录存在
+            os.makedirs(self.prompts_dir, exist_ok=True)
+
+            # 保存模板
+            template_file = os.path.join(self.prompts_dir, f"{template_name}.txt")
+            with open(template_file, 'w', encoding='utf-8') as f:
+                f.write(content)
+
+            self.current_template = template_name
+            self.template_name_entry.config(state='readonly')
+
+            # 刷新列表
+            self.refresh_template_list()
+
+            # 选中保存的模板
+            for item in self.templates_tree.get_children():
+                values = self.templates_tree.item(item, 'values')
+                if values and values[0] == template_name:
+                    self.templates_tree.selection_set(item)
+                    break
+
+            self.template_status_var.set(f"模板 '{template_name}' 已保存")
+
+            # 更新设置页面的模板选择框
+            self.update_template_combo()
+
+            messagebox.showinfo("成功", f"模板 '{template_name}' 已保存")
+        except Exception as e:
+            messagebox.showerror("错误", f"保存模板失败: {str(e)}")
+
+    def delete_template(self):
+        """删除模板"""
+        selection = self.templates_tree.selection()
+        if not selection:
+            messagebox.showwarning("警告", "请先选择要删除的模板")
+            return
+
+        item = selection[0]
+        values = self.templates_tree.item(item, 'values')
+        if not values:
+            return
+
+        template_name = values[0]
+
+        if not messagebox.askyesno("确认删除", f"确定要删除模板 '{template_name}' 吗？"):
+            return
+
+        try:
+            template_file = os.path.join(self.prompts_dir, f"{template_name}.txt")
+            if os.path.exists(template_file):
+                os.remove(template_file)
+
+            # 清空编辑器
+            if self.current_template == template_name:
+                self.clear_template_editor()
+
+            # 刷新列表
+            self.refresh_template_list()
+
+            # 更新设置页面的模板选择框
+            self.update_template_combo()
+
+            messagebox.showinfo("成功", f"模板 '{template_name}' 已删除")
+        except Exception as e:
+            messagebox.showerror("错误", f"删除模板失败: {str(e)}")
+
+    def clear_template_editor(self):
+        """清空模板编辑器"""
+        self.current_template = None
+        self.template_name_entry.config(state='normal')
+        self.template_name_entry.delete(0, tk.END)
+        self.template_desc_entry.delete(0, tk.END)
+        self.template_content_text.delete(1.0, tk.END)
+        self.template_status_var.set("请选择一个模板或创建新模板")
+
+    def update_template_combo(self):
+        """更新设置页面的模板选择框"""
+        # 获取所有模板
+        template_options = []
+        if os.path.exists(self.prompts_dir):
+            for filename in sorted(os.listdir(self.prompts_dir)):
+                if filename.endswith('.txt'):
+                    template_options.append(filename[:-4])
+
+        if not template_options:
+            return
+
+        # 保存当前选中的值
+        current_value = self.template_var.get()
+
+        # 直接更新设置页面的模板选择框
+        # 重新查找模板选择框
+        for widget in self.root.winfo_children():
+            self._update_combo_recursively(widget, template_options, current_value)
+
+    def _update_combo_recursively(self, widget, template_options, current_value):
+        """递归更新所有Combobox"""
+        try:
+            # 只更新模板选择下拉框（通过判断其值是否为模板名称）
+            if isinstance(widget, ttk.Combobox):
+                widget_values = widget.get()
+                # 检查这个下拉框是否是模板选择框
+                if widget_values and widget_values in ["audio_content_analysis", "text_summary", "meeting_analysis", "course_analysis"] or widget_values in template_options:
+                    widget['values'] = template_options
+                    # 如果当前值还在选项中，保持选中
+                    if current_value in template_options:
+                        widget.set(current_value)
+                    elif template_options:
+                        widget.current(0)
+        except:
+            pass
+
+        for child in widget.winfo_children():
+            self._update_combo_recursively(child, template_options, current_value)
     
     def browse_file_or_folder(self):
         """根据当前模式浏览选择文件或文件夹"""
@@ -358,23 +746,18 @@ class AudioTranscriberGUI:
                     except Exception:
                         continue
         
-        # 显示加载的内容
+        # 显示加载的内容到日志
         if transcription:
-            self.transcription_text.delete(1.0, tk.END)
-            self.transcription_text.insert(tk.END, transcription)
-        
+            self.add_log(f"转录内容已加载: {os.path.basename(transcript_file)}", "SUCCESS")
+
         if summary:
-            self.summary_text.delete(1.0, tk.END)
-            self.summary_text.insert(tk.END, summary)
-        
+            self.add_log(f"总结内容已加载", "SUCCESS")
+
         # 更新状态
         status = "已加载现有文件"
         if transcript_file:
             status += f" | 转录文件: {os.path.basename(transcript_file)}"
         self.status_var.set(status)
-        
-        # 启用保存按钮
-        self.save_button.config(state=tk.NORMAL)
     
     def scan_audio_files(self, source_folder):
         """扫描文件夹中的所有音频文件，保持源文件夹结构"""
@@ -721,11 +1104,10 @@ class AudioTranscriberGUI:
         self.start_button.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.NORMAL)
         self.save_button.config(state=tk.DISABLED)
-        
-        # 在文件夹模式下清空结果，单文件模式下不清空（支持断点续传）
-        if self.is_folder_mode.get():
-            self.transcription_text.delete(1.0, tk.END)
-            self.summary_text.delete(1.0, tk.END)
+
+        # 清空日志
+        self.clear_log()
+        self.add_log("开始处理...", "INFO")
         
         # 重置进度
         if self.is_folder_mode.get():
@@ -793,8 +1175,24 @@ class AudioTranscriberGUI:
     
     def transcription_worker(self):
         """转录工作线程 - 处理CPU密集型任务"""
-        while not self.stop_threads and not self.transcription_queue.empty():
+        while not self.stop_threads:
             try:
+                # 检查停止标志
+                if self.stop_threads:
+                    break
+
+                # 检查队列是否为空
+                if self.transcription_queue.empty():
+                    break
+
+                # 从队列获取文件（现在是元组：(完整路径, 相对路径)）
+                audio_file_tuple = self.transcription_queue.get(timeout=1)
+                audio_file = audio_file_tuple[0]  # 完整路径
+                rel_path = audio_file_tuple[1]    # 相对路径
+
+                # 再次检查停止标志
+                if self.stop_threads:
+                    break
                 # 从队列获取文件（现在是元组：(完整路径, 相对路径)）
                 audio_file_tuple = self.transcription_queue.get(timeout=1)
                 audio_file = audio_file_tuple[0]  # 完整路径
@@ -1097,38 +1495,35 @@ class AudioTranscriberGUI:
     
     def _display_single_result(self, audio_file, transcription, summary, transcript_file, rel_path=None):
         """显示单文件结果"""
-        # 在文件夹模式下清空结果，单文件模式下不清空（支持断点续传）
-        if self.is_folder_mode.get():
-            self.root.after(0, lambda: self.transcription_text.delete(1.0, tk.END))
-            self.root.after(0, lambda: self.summary_text.delete(1.0, tk.END))
-        
-        # 显示结果在界面上
-        self.root.after(0, lambda t=transcription: self.transcription_text.insert(tk.END, t))
-        self.root.after(0, lambda s=summary: self.summary_text.insert(tk.END, s))
-        
+        # 在日志中显示结果摘要
+        audio_name = os.path.basename(audio_file)
+        self.root.after(0, lambda: self.add_log(f"转录完成: {audio_name}", "SUCCESS"))
+        self.root.after(0, lambda: self.add_log(f"  转录字符数: {len(transcription)}", "INFO"))
+        self.root.after(0, lambda: self.add_log(f"  总结字符数: {len(summary)}", "INFO"))
+
         # 显示转录文件路径
         if transcript_file and os.path.exists(transcript_file):
-            self.root.after(0, lambda: self.status_var.set(f"转录已保存到: {transcript_file}"))
-        
+            self.root.after(0, lambda: self.add_log(f"  转录文件: {transcript_file}", "INFO"))
+
         # 检查是否需要保存总结文件
         output_folder = self.output_folder.get() or self.config.get_output_folder()
         base_name = os.path.splitext(os.path.basename(audio_file))[0]
         summary_dir = os.path.join(output_folder, 'summaries')
         summary_exists = False
-        
+
         if os.path.exists(summary_dir):
             for filename in os.listdir(summary_dir):
                 if filename.startswith(f"{base_name}_总结") and filename.endswith(".md"):
                     summary_exists = True
                     break
-        
+
         if not summary_exists:
             # 保存总结文件
             self._save_summary_only(audio_file, summary, output_folder, rel_path)
-            self.root.after(0, lambda: self.status_var.set(f"转录已保存到: {transcript_file}, 总结已保存"))
+            self.root.after(0, lambda: self.add_log(f"  总结文件已保存", "SUCCESS"))
         else:
-            self.root.after(0, lambda: self.status_var.set(f"转录已保存到: {transcript_file}, 总结已存在"))
-        
+            self.root.after(0, lambda: self.add_log(f"  总结文件已存在", "WARNING"))
+
         self.root.after(0, self.update_file_progress, audio_file, '总结完成', 100, "summary")
     
     def monitor_threads(self):
@@ -1245,82 +1640,47 @@ class AudioTranscriberGUI:
         self.file_start_times = {}
     
     def save_results(self, audio_file=None, transcription=None, summary=None, rel_path=None):
-        """保存转录和总结结果"""
-        # 如果传入了参数，使用传入的参数保存单个文件的结果
-        if audio_file and transcription is not None and summary is not None:
-            output_folder = self.output_folder.get() or self.config.get_output_folder()
-            
-            # 保存结果，保持源文件夹结构
-            transcript_file, summary_file = FileUtils.save_results(
-                transcription, summary, audio_file, output_folder, rel_path
-            )
-            
-            # 显示保存位置
-            messagebox.showinfo(
-                "保存完成",
-                f"转录文件: {transcript_file}\n总结文件: {summary_file}"
-            )
-            return
-        
-        # 批量处理模式下，结果已经自动保存
+        """显示保存结果信息（结果已自动保存）"""
+        # 获取输出目录
+        output_dir = self.config.get_output_folder() or self.output_folder.get() or 'output'
+        transcript_dir = os.path.normpath(os.path.join(output_dir, 'transcripts'))
+        summary_dir = os.path.normpath(os.path.join(output_dir, 'summaries'))
+
         if self.is_folder_mode.get() and self.audio_files:
-            output_dir = self.config.get_output_folder() or 'output'
-            # 确保路径使用正确的分隔符
-            transcript_dir = os.path.normpath(os.path.join(output_dir, 'transcripts'))
-            summary_dir = os.path.normpath(os.path.join(output_dir, 'summaries'))
-            messagebox.showinfo(
-                "保存结果",
-                f"批量处理结果已保存到以下目录：\n\n"
-                f"转录文件: {transcript_dir}\n"
-                f"总结文件: {summary_dir}"
-            )
-            self.status_var.set("结果已保存")
-            return
-        
-        # 单文件模式下的保存逻辑
-        transcription = self.transcription_text.get(1.0, tk.END).strip()
-        summary = self.summary_text.get(1.0, tk.END).strip()
-        
-        if not transcription and not summary:
-            messagebox.showwarning("警告", "没有可保存的内容")
-            return
-        
-        try:
-            # 使用用户选择的输出文件夹，如果没有则使用配置中的默认值
-            output_dir = self.output_folder.get() or self.config.get_output_folder() or 'output'
-            
-            # 规范化路径并确保输出文件夹存在
-            output_dir = os.path.normpath(output_dir)
-            os.makedirs(output_dir, exist_ok=True)
-            
-            # 获取音频文件名（不含扩展名）作为基础文件名
+            # 批量处理模式 - 显示统计信息
+            completed_count = sum(1 for status in self.file_progress.values()
+                                if status.get('trans_status', '').startswith('转录完成') and
+                                   status.get('sum_status', '').startswith('总结完成'))
+            total_count = len(self.audio_files)
+
+            message = f"批量处理已完成 {completed_count}/{total_count} 个文件\n\n"
+            message += f"结果已保存到以下目录：\n"
+            message += f"转录文件: {transcript_dir}\n"
+            message += f"总结文件: {summary_dir}"
+
+            self.add_log(f"批量处理完成: {completed_count}/{total_count}", "SUCCESS")
+            self.add_log(f"  转录目录: {transcript_dir}", "INFO")
+            self.add_log(f"  总结目录: {summary_dir}", "INFO")
+
+            messagebox.showinfo("保存结果", message)
+        else:
+            # 单文件模式 - 显示文件位置
             file_path = self.audio_file.get()
-            if not file_path:
-                raise ValueError("未选择音频文件")
-            
-            base_name = os.path.splitext(os.path.basename(file_path))[0]
-            
-            # 保存转录文本
-            safe_base_name = sanitize_filename(base_name)
-            transcript_file = os.path.normpath(os.path.join(output_dir, f"{safe_base_name}_transcript.txt"))
-            with open(transcript_file, 'w', encoding='utf-8') as f:
-                f.write(transcription)
-            
-            # 保存总结文本 - 修改为.md格式
-            safe_base_name = sanitize_filename(base_name)
-            summary_file = os.path.normpath(os.path.join(output_dir, f"{safe_base_name}_总结.md"))
-            with open(summary_file, 'w', encoding='utf-8') as f:
-                # 使用Markdown格式
-                f.write(f"# {base_name}\n\n")
-                f.write(f"**音频文件:** {file_path}\n\n")
-                f.write(f"**处理时间:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-                f.write("## 总结内容\n\n")
-                f.write(summary)
-            
-            messagebox.showinfo("保存成功", f"结果已保存:\n转录: {transcript_file}\n总结: {summary_file}")
-            self.status_var.set("结果已保存")
-        except Exception as e:
-            messagebox.showerror("保存失败", f"保存结果时出错: {str(e)}")
+            if file_path:
+                base_name = os.path.splitext(os.path.basename(file_path))[0]
+
+                message = f"结果已自动保存\n\n"
+                message += f"转录文件: {transcript_dir}\n"
+                message += f"总结文件: {summary_dir}\n\n"
+                message += f"文件前缀: {base_name}"
+
+                self.add_log(f"结果保存位置:", "INFO")
+                self.add_log(f"  转录目录: {transcript_dir}", "INFO")
+                self.add_log(f"  总结目录: {summary_dir}", "INFO")
+
+                messagebox.showinfo("保存结果", message)
+            else:
+                self.add_log("未选择音频文件", "WARNING")
 
 
 def main():
