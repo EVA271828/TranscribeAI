@@ -39,7 +39,17 @@ class StreamRedirector:
     def write(self, text):
         """重定向write方法"""
         if text.strip():  # 只写入非空文本
-            self.widget(text.strip(), self.level)
+            # 如果是stderr，检查是否是真正的错误还是正常的输出
+            if self.level == "ERROR":
+                # Whisper等库的正常输出会通过stderr输出，需要过滤
+                text_lower = text.strip().lower()
+                # 只有包含真正错误关键字的才标记为ERROR
+                error_keywords = ['error', 'exception', 'failed', 'traceback', 'cannot', 'unable to',
+                               'not found', 'permission denied', 'invalid']
+                is_real_error = any(keyword in text_lower for keyword in error_keywords)
+                self.widget(text.strip(), "ERROR" if is_real_error else "INFO")
+            else:
+                self.widget(text.strip(), self.level)
 
     def flush(self):
         """重定向flush方法"""
@@ -198,9 +208,20 @@ class AudioTranscriberGUI:
         self.settings_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.settings_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # 支持鼠标滚轮滚动
+        # 支持鼠标滚轮滚动 - 只有在内容超出可视区域时才允许滚动
         def _on_mousewheel(event):
-            self.settings_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+            # 获取canvas的可视高度和内容高度
+            canvas_height = self.settings_canvas.winfo_height()
+            scroll_region = self.settings_canvas.cget("scrollregion")
+
+            # 解析scrollregion (格式: x1 y1 x2 y2)
+            if scroll_region:
+                parts = scroll_region.split()
+                if len(parts) >= 4:
+                    content_height = float(parts[3])
+                    # 只有当内容高度大于canvas可视高度时才允许滚动
+                    if content_height > canvas_height:
+                        self.settings_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
 
         self.settings_canvas.bind_all("<MouseWheel>", _on_mousewheel)
 
@@ -219,44 +240,15 @@ class AudioTranscriberGUI:
         self.file_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
         ttk.Button(file_frame, text="浏览...", command=self.browse_file_or_folder).pack(side=tk.RIGHT)
 
-        # 文件列表显示（仅在文件夹模式下显示）
-        self.list_frame = ttk.LabelFrame(self.settings_scrollable_frame, text="文件列表", padding="10")
+        # 输出文件夹选择（移到输入文件夹下方）
+        output_frame = ttk.LabelFrame(self.settings_scrollable_frame, text="输出文件夹", padding="10")
+        output_frame.pack(fill=tk.X, pady=(0, 10), padx=10)
 
-        # 创建Treeview显示文件列表和进度
-        columns = ("文件名", "转录状态", "转录进度", "总结状态", "总结进度")
-        self.file_tree = ttk.Treeview(self.list_frame, columns=columns, show="tree headings", height=8)
-
-        # 设置列标题
-        self.file_tree.heading("#0", text="")
-        self.file_tree.heading("文件名", text="文件名")
-        self.file_tree.heading("转录状态", text="转录状态")
-        self.file_tree.heading("转录进度", text="转录进度")
-        self.file_tree.heading("总结状态", text="总结状态")
-        self.file_tree.heading("总结进度", text="总结进度")
-
-        # 设置列宽
-        self.file_tree.column("#0", width=0, stretch=False)
-        self.file_tree.column("文件名", width=250, minwidth=200)
-        self.file_tree.column("转录状态", width=80, minwidth=60)
-        self.file_tree.column("转录进度", width=80, minwidth=60)
-        self.file_tree.column("总结状态", width=80, minwidth=60)
-        self.file_tree.column("总结进度", width=80, minwidth=60)
-
-        # 添加滚动条
-        scrollbar = ttk.Scrollbar(self.list_frame, orient="vertical", command=self.file_tree.yview)
-        self.file_tree.configure(yscrollcommand=scrollbar.set)
-
-        self.file_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-        # 根据输入模式启用/禁用控件
-        self.update_input_mode()
-
-        # 绑定输入模式切换事件
-        self.is_folder_mode.trace_add('write', lambda *args: self.update_input_mode())
+        ttk.Entry(output_frame, textvariable=self.output_folder, width=70).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+        ttk.Button(output_frame, text="浏览...", command=self.browse_output_folder).pack(side=tk.RIGHT)
 
         # 模型选择
-        model_frame = ttk.LabelFrame(self.settings_scrollable_frame, text="Whisper模型", padding="10")
+        model_frame = ttk.LabelFrame(self.settings_scrollable_frame, text="转录Whisper模型", padding="10")
         model_frame.pack(fill=tk.X, pady=(0, 10), padx=10)
 
         model_options = ["tiny", "base", "small", "medium", "large"]
@@ -299,16 +291,42 @@ class AudioTranscriberGUI:
         template_info = ttk.Label(self.template_frame, text="选择适合您内容的模板", foreground="gray")
         template_info.pack(side=tk.LEFT, padx=(10, 0))
 
-        # 输出文件夹选择
-        output_frame = ttk.LabelFrame(self.settings_scrollable_frame, text="输出文件夹", padding="10")
-        output_frame.pack(fill=tk.X, pady=(0, 10), padx=10)
+        # 创建可调整高度的分割区域（文件列表 + 日志）
+        self.split_paned = ttk.PanedWindow(self.settings_scrollable_frame, orient=tk.VERTICAL)
+        self.split_paned.pack(fill=tk.BOTH, expand=True, pady=(10, 0), padx=10)
 
-        ttk.Entry(output_frame, textvariable=self.output_folder, width=70).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
-        ttk.Button(output_frame, text="浏览...", command=self.browse_output_folder).pack(side=tk.RIGHT)
+        # 文件列表显示（仅在文件夹模式下显示）
+        self.list_frame = ttk.LabelFrame(self.split_paned, text="文件列表", padding="10")
+
+        # 创建Treeview显示文件列表和进度
+        columns = ("文件名", "转录状态", "转录进度", "总结状态", "总结进度")
+        self.file_tree = ttk.Treeview(self.list_frame, columns=columns, show="tree headings", height=8)
+
+        # 设置列标题
+        self.file_tree.heading("#0", text="")
+        self.file_tree.heading("文件名", text="文件名")
+        self.file_tree.heading("转录状态", text="转录状态")
+        self.file_tree.heading("转录进度", text="转录进度")
+        self.file_tree.heading("总结状态", text="总结状态")
+        self.file_tree.heading("总结进度", text="总结进度")
+
+        # 设置列宽
+        self.file_tree.column("#0", width=0, stretch=False)
+        self.file_tree.column("文件名", width=250, minwidth=200)
+        self.file_tree.column("转录状态", width=80, minwidth=60)
+        self.file_tree.column("转录进度", width=80, minwidth=60)
+        self.file_tree.column("总结状态", width=80, minwidth=60)
+        self.file_tree.column("总结进度", width=80, minwidth=60)
+
+        # 添加滚动条
+        scrollbar = ttk.Scrollbar(self.list_frame, orient="vertical", command=self.file_tree.yview)
+        self.file_tree.configure(yscrollcommand=scrollbar.set)
+
+        self.file_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
         # 日志输出区域
-        log_frame = ttk.LabelFrame(self.settings_scrollable_frame, text="输出日志", padding="10")
-        log_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 0), padx=10)
+        log_frame = ttk.LabelFrame(self.split_paned, text="输出日志", padding="10")
 
         # 日志文本框
         self.log_text = scrolledtext.ScrolledText(log_frame, wrap=tk.WORD, height=15, font=("Consolas", 9))
@@ -325,6 +343,16 @@ class AudioTranscriberGUI:
         log_button_frame = ttk.Frame(log_frame)
         log_button_frame.pack(fill=tk.X, pady=(5, 0))
         ttk.Button(log_button_frame, text="清空日志", command=self.clear_log).pack(side=tk.RIGHT)
+
+        # 将文件列表和日志区域添加到分割窗口
+        self.split_paned.add(self.list_frame, weight=1)
+        self.split_paned.add(log_frame, weight=1)
+
+        # 根据输入模式启用/禁用控件
+        self.update_input_mode()
+
+        # 绑定输入模式切换事件
+        self.is_folder_mode.trace_add('write', lambda *args: self.update_input_mode())
 
         # 初始化时根据总结选项状态显示/隐藏
         self.toggle_summary_options()
@@ -704,6 +732,8 @@ class AudioTranscriberGUI:
             folder = filedialog.askdirectory(title="选择包含音频文件的文件夹")
             if folder:
                 self.audio_file.set(folder)
+                # 保存输入文件夹到配置
+                self.config.set_input_folder(folder)
                 self.scan_and_display_audio_files()
         else:
             # 单文件模式
@@ -711,14 +741,16 @@ class AudioTranscriberGUI:
                 ("音频文件", "*.mp3 *.wav *.m4a *.flac *.ogg"),
                 ("所有文件", "*.*")
             ]
-            
+
             filename = filedialog.askopenfilename(
                 title="选择音频文件",
                 filetypes=filetypes
             )
-            
+
             if filename:
                 self.audio_file.set(filename)
+                # 保存输入文件所在文件夹到配置
+                self.config.set_input_folder(os.path.dirname(filename))
                 # 检查断点续传状态
                 self.check_single_file_resume_status(filename)
     
@@ -919,7 +951,7 @@ class AudioTranscriberGUI:
     def update_input_mode(self):
         """根据输入模式更新界面"""
         is_folder = self.is_folder_mode.get()
-        
+
         # 更新标签文本
         if is_folder:
             # 文件夹模式
@@ -927,19 +959,33 @@ class AudioTranscriberGUI:
                 if isinstance(widget, ttk.LabelFrame):
                     widget.config(text="音频文件夹")
                     break
-            
-            # 显示文件列表
-            self.list_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10), after=self.file_entry.master)
+
+            # 显示文件列表（使用PanedWindow的show方法）
+            try:
+                self.split_paned.show(self.list_frame)
+            except:
+                # 如果show方法不可用，使用forget/add方式
+                # 先检查文件列表是否已经在PanedWindow中
+                already_in_pane = False
+                for pane_info in self.split_paned.panes():
+                    if pane_info == str(self.list_frame):
+                        already_in_pane = True
+                        break
+                if not already_in_pane:
+                    self.split_paned.insert(0, self.list_frame, weight=1)
         else:
             # 单文件模式
             for widget in self.file_entry.master.winfo_children():
                 if isinstance(widget, ttk.LabelFrame):
                     widget.config(text="音频文件")
                     break
-            
+
             # 隐藏文件列表
-            self.list_frame.pack_forget()
-            
+            try:
+                self.split_paned.forget(self.list_frame)
+            except:
+                pass
+
             # 检查当前选择的文件是否存在断点续传的可能
             current_file = self.audio_file.get()
             if current_file and os.path.exists(current_file):
@@ -1000,6 +1046,8 @@ class AudioTranscriberGUI:
         folder = filedialog.askdirectory(title="选择输出文件夹")
         if folder:
             self.output_folder.set(folder)
+            # 保存输出文件夹到配置
+            self.config.set_output_folder(folder)
     
     def toggle_summary_options(self):
         """根据总结选项状态显示或隐藏API密钥和模板区域"""
@@ -1136,15 +1184,22 @@ class AudioTranscriberGUI:
         api_key = self.config.get_api_key()
         if api_key:
             self.api_key.set(api_key)
-        
+
         default_model = self.config.get_default_model()
         if default_model:
             self.model_var.set(default_model)
-        
+
         default_template = self.config.get_default_template()
         if default_template:
             self.template_var.set(default_template)
-        
+
+        input_folder = self.config.get_input_folder()
+        if input_folder:
+            self.audio_file.set(input_folder)
+            # 如果是文件夹模式且输入文件夹存在，自动扫描并显示文件
+            if self.is_folder_mode.get() and os.path.isdir(input_folder):
+                self.scan_and_display_audio_files()
+
         output_folder = self.config.get_output_folder()
         if output_folder:
             self.output_folder.set(output_folder)

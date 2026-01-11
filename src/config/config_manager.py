@@ -36,6 +36,7 @@ class ConfigManager:
         self.config['settings'] = {
             'default_model': 'small',
             'default_template': 'audio_content_analysis',
+            'input_folder': '',
             'output_folder': 'output'
         }
         self.save_config()
@@ -65,22 +66,45 @@ class ConfigManager:
     def get_default_model(self):
         """
         获取默认模型
-        
+
         Returns:
             str: 默认模型名称
         """
         return self.config.get('settings', 'default_model')
-    
+
     def set_default_model(self, model):
         """
         设置默认模型
-        
+
         Args:
             model (str): 模型名称
         """
         self.config.set('settings', 'default_model', model)
         self.save_config()
-    
+
+    def get_input_folder(self):
+        """
+        获取输入文件夹
+
+        Returns:
+            str: 输入文件夹路径
+        """
+        try:
+            return self.config.get('settings', 'input_folder')
+        except (configparser.NoOptionError, configparser.NoSectionError):
+            # 如果配置文件中没有input_folder选项，则返回空字符串
+            return ''
+
+    def set_input_folder(self, folder):
+        """
+        设置输入文件夹
+
+        Args:
+            folder (str): 输入文件夹路径
+        """
+        self.config.set('settings', 'input_folder', folder)
+        self.save_config()
+
     def get_default_template(self):
         """
         获取默认模板
