@@ -1731,67 +1731,67 @@ class AudioTranscriberGUI:
         self.stop_threads = True
         self.status_var.set("正在停止...")
         self.stop_button.config(state=tk.DISABLED)
-        
+
         # 通知转录器停止（如果支持）
         if self.transcriber and hasattr(self.transcriber, 'stop'):
             self.transcriber.stop()
-            
+
         # 通知总结器停止（如果支持）
         if self.summarizer and hasattr(self.summarizer, 'stop'):
             self.summarizer.stop()
-        
-        # 等待所有线程结束，增加超时时间
+
+        # 等待转录线程结束（短超时，快速响应）
         if self.transcription_thread and self.transcription_thread.is_alive():
-            self.transcription_thread.join(timeout=5)
-        
-        # 等待所有总结线程结束，增加超时时间
+            self.transcription_thread.join(timeout=1)
+
+        # 等待所有总结线程结束（短超时，快速响应）
         for thread in self.summary_threads:
             if thread.is_alive():
-                thread.join(timeout=5)
-        
+                thread.join(timeout=1)
+
         # 清空队列
         while not self.transcription_queue.empty():
             try:
                 self.transcription_queue.get_nowait()
             except queue.Empty:
                 break
-                
+
         while not self.summary_queue.empty():
             try:
                 self.summary_queue.get_nowait()
             except queue.Empty:
                 break
-        
+
         # 重置状态
         self.stop_threads = False
         self.transcription_thread = None
         self.summary_threads = []
         self.active_summary_threads = 0
-        
+
         # 重置转录器和总结器的停止标志
         if self.transcriber and hasattr(self.transcriber, 'reset_stop_flag'):
             self.transcriber.reset_stop_flag()
-            
+
         if self.summarizer and hasattr(self.summarizer, 'reset_stop_flag'):
             self.summarizer.reset_stop_flag()
-        
+
         # 更新UI状态
         self.status_var.set("已停止")
         self.start_button.config(state=tk.NORMAL)
         self.stop_button.config(state=tk.DISABLED)
-        
+
         # 更新所有未完成文件的状态为"已停止"
         for file_path, progress_info in self.file_progress.items():
             if progress_info['trans_progress'] < 100:
                 self.update_file_progress(file_path, '已停止', 0, "transcription")
             if progress_info['sum_progress'] < 100:
                 self.update_file_progress(file_path, '已停止', 0, "summary")
-        
+
         # 重置线程相关变量
         self.transcription_thread = None
         self.summary_threads = []
         self.active_summary_threads = 0
-        
+
         # 重置计时变量
         self.file_start_times = {}
     

@@ -3,14 +3,15 @@ import torch
 import time
 import os
 import librosa
+import threading
 
 class WhisperTranscriber:
     """Whisper语音识别类"""
-    
+
     def __init__(self, model_name="small"):
         """
         初始化Whisper模型
-        
+
         Args:
             model_name (str): 模型名称，可选: tiny, base, small, medium, large
         """
@@ -18,6 +19,9 @@ class WhisperTranscriber:
         self.model_name = model_name
         self.model = None
         self._stop_flag = False
+        self._transcribe_thread = None
+        self._transcribe_result = None
+        self._transcribe_error = None
         print(f"设备设置为使用 {self.device}")
     
     def stop(self):
