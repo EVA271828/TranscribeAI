@@ -3,6 +3,7 @@ import json
 import time
 import os
 import threading
+import uuid
 
 class DeepSeekSummarizer:
     """DeepSeek API总结类"""
@@ -18,28 +19,21 @@ class DeepSeekSummarizer:
         self.api_key = api_key
         self.api_url = "https://api.deepseek.com/chat/completions"
         self.prompts_dir = prompts_dir
-        self._stop_flag = False
-        self._summarize_thread = None
-        self._summarize_result = None
-        self._summarize_error = None
         self._lock = threading.Lock()
+        # 用于停止标志的全局控制 - 使用uuid作为键，列表存储实际标志
+        self._stop_flags = {}  # {uuid: [False]}
 
     def stop(self):
-        """设置停止标志，用于中断长时间运行的总结"""
-        self._stop_flag = True
-        # 等待总结线程结束（短超时）
+        """设置停止标志，用于中断所有长时间运行的总结"""
         with self._lock:
-            if self._summarize_thread and self._summarize_thread.is_alive():
-                self._summarize_thread.join(timeout=2)
-        print("收到停止信号，正在中断总结...")
+            for flag in self._stop_flags.values():
+                flag[0] = True
+        print("收到停止信号，正在中断所有总结...")
 
-    def reset_stop_flag(self):
-        """重置停止标志"""
-        self._stop_flag = False
+    def reset_stop_flags(self):
+        """重置所有停止标志"""
         with self._lock:
-            self._summarize_thread = None
-            self._summarize_result = None
-            self._summarize_error = None
+            self._stop_flags.clear()
 
     def load_prompt_template(self, template_name):
         """
@@ -78,7 +72,7 @@ class DeepSeekSummarizer:
         )
         return prompt
 
-    def _summarize_worker(self, text, audio_title, template_name):
+    def _summarize_worker(self, text, audio_title, template_name, stop_flag_id, result_container):
         """总结工作线程，用于在后台执行总结以便快速停止"""
         try:
             prompt = self.create_prompt(text, audio_title, template_name)
@@ -117,14 +111,20 @@ class DeepSeekSummarizer:
             print("正在调用DeepSeek API进行内容总结...")
             start_time = time.time()
 
-            # 使用较短的超时时间，使得可以快速响应停止信号
-            # 如果API调用超过5秒还未完成，检查停止标志
-            timeout = 5  # 短超时
-            while True:
+            # 使用合理的超时时间并增加重试机制
+            max_retries = 3
+            retry_count = 0
+            timeout = 120  # 初始超时时间设为120秒
+
+            while retry_count < max_retries:
                 # 检查停止标志
-                if self._stop_flag:
+                with self._lock:
+                    stop_flag = self._stop_flags.get(stop_flag_id, [False])
+                    should_stop = stop_flag[0]
+
+                if should_stop:
                     print("总结被用户中断")
-                    self._summarize_result = ""
+                    result_container['result'] = ""
                     return
 
                 try:
@@ -132,33 +132,70 @@ class DeepSeekSummarizer:
                     response.raise_for_status()
 
                     # 检查是否在请求过程中被中断
-                    if self._stop_flag:
+                    with self._lock:
+                        stop_flag = self._stop_flags.get(stop_flag_id, [False])
+                        should_stop = stop_flag[0]
+
+                    if should_stop:
                         print("总结被用户中断")
-                        self._summarize_result = ""
+                        result_container['result'] = ""
                         return
 
                     print(f"API调用耗时: {time.time() - start_time:.2f}秒")
 
                     result = response.json()
-                    self._summarize_result = result["choices"][0]["message"]["content"]
+                    result_container['result'] = result["choices"][0]["message"]["content"]
                     return
 
                 except requests.exceptions.Timeout:
-                    # 超时后检查停止标志
-                    if self._stop_flag:
-                        print("总结被用户中断")
-                        self._summarize_result = ""
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        print(f"API调用超时，正在重试 ({retry_count}/{max_retries})...")
+                        # 检查停止标志
+                        with self._lock:
+                            stop_flag = self._stop_flags.get(stop_flag_id, [False])
+                            should_stop = stop_flag[0]
+
+                        if should_stop:
+                            print("总结被用户中断")
+                            result_container['result'] = ""
+                            return
+                        # 增加超时时间后重试
+                        timeout = 180
+                        continue
+                    else:
+                        print(f"API调用超时，已重试{max_retries}次，放弃")
+                        result_container['error'] = "总结生成失败: API调用超时，请检查网络连接或稍后重试"
                         return
-                    # 如果没有停止标志，增加超时时间继续尝试
-                    timeout = 60
+
                 except requests.exceptions.RequestException as e:
-                    print(f"API调用失败: {e}")
-                    self._summarize_error = f"总结生成失败: {str(e)}"
-                    return
+                    retry_count += 1
+                    if retry_count < max_retries and isinstance(e, requests.exceptions.ConnectionError):
+                        print(f"API调用网络错误，正在重试 ({retry_count}/{max_retries})...")
+                        # 检查停止标志
+                        with self._lock:
+                            stop_flag = self._stop_flags.get(stop_flag_id, [False])
+                            should_stop = stop_flag[0]
+
+                        if should_stop:
+                            print("总结被用户中断")
+                            result_container['result'] = ""
+                            return
+                        time.sleep(2)  # 等待2秒后重试
+                        continue
+                    else:
+                        print(f"API调用失败: {e}")
+                        result_container['error'] = f"总结生成失败: {str(e)}"
+                        return
 
         except Exception as e:
             print(f"总结过程中出错: {e}")
-            self._summarize_error = str(e)
+            result_container['error'] = str(e)
+        finally:
+            # 清理停止标志
+            with self._lock:
+                if stop_flag_id in self._stop_flags:
+                    del self._stop_flags[stop_flag_id]
 
     def summarize(self, text, audio_title="音频内容", template_name="audio_content_analysis"):
         """
@@ -172,32 +209,34 @@ class DeepSeekSummarizer:
         Returns:
             str: 总结结果
         """
-        # 重置结果和错误
+        # 为此总结任务创建独立的停止标志ID和结果容器
+        stop_flag_id = uuid.uuid4()
+        result_container = {'result': None, 'error': None}
+
+        # 注册停止标志
         with self._lock:
-            self._summarize_result = None
-            self._summarize_error = None
-            self._stop_flag = False
+            self._stop_flags[stop_flag_id] = [False]
 
         # 创建并启动总结线程
-        with self._lock:
-            self._summarize_thread = threading.Thread(
-                target=self._summarize_worker,
-                args=(text, audio_title, template_name),
-                daemon=True
-            )
-            self._summarize_thread.start()
+        summarize_thread = threading.Thread(
+            target=self._summarize_worker,
+            args=(text, audio_title, template_name, stop_flag_id, result_container),
+            daemon=True
+        )
+        summarize_thread.start()
 
         # 等待线程完成（使用轮询方式，可以被 stop() 中断）
         while True:
+            if not summarize_thread.is_alive():
+                break
+            # 检查停止标志
             with self._lock:
-                if not self._summarize_thread.is_alive():
-                    break
-                if self._stop_flag:
-                    return ""
+                should_stop = self._stop_flags.get(stop_flag_id, [False])[0]
+            if should_stop:
+                return ""
             time.sleep(0.1)
 
         # 返回结果或抛出异常
-        with self._lock:
-            if self._summarize_error:
-                return self._summarize_error
-            return self._summarize_result or ""
+        if result_container['error']:
+            return result_container['error']
+        return result_container['result'] or ""

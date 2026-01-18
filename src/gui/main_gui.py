@@ -122,7 +122,7 @@ class AudioTranscriberGUI:
         
         # 总结线程池
         self.summary_threads = []
-        self.max_summary_threads = 5  # 最多支持5个并发总结线程
+        self.max_summary_threads = 20  # 最多支持5个并发总结线程
         self.summary_thread_pool = queue.Queue(maxsize=self.max_summary_threads)  # 限制并发数
         self.active_summary_threads = 0
         self.summary_results = {}  # 存储总结结果 {文件名: 总结内容}
@@ -1341,12 +1341,17 @@ class AudioTranscriberGUI:
                 # 检查转录文件是否已存在
                 output_folder = self.output_folder.get() or self.config.get_output_folder()
                 base_name = os.path.splitext(os.path.basename(audio_file))[0]
-                
-                # 查找最新的转录文件
+
+                # 查找最新的转录文件（考虑子目录结构）
                 transcript_dir = os.path.join(output_folder, 'transcripts')
+                # 如果有相对路径的目录部分，则在转录目录下创建相同的子目录结构
+                rel_dir = os.path.dirname(rel_path)
+                if rel_dir:
+                    transcript_dir = os.path.join(transcript_dir, rel_dir)
+
                 transcript_file = None
                 transcription = None
-                
+
                 if os.path.exists(transcript_dir):
                     # 查找匹配的转录文件
                     for filename in os.listdir(transcript_dir):
@@ -1375,8 +1380,9 @@ class AudioTranscriberGUI:
                             'transcript_file': transcript_file
                         })
 
-                        # 动态创建总结线程（如果未达到最大线程数）
+                        # 动态创建总结线程（使用线程锁避免竞争条件）
                         if self.active_summary_threads < self.max_summary_threads:
+                            self.summary_thread_pool.put_nowait(True)  # 标记线程槽位被占用
                             summary_thread = threading.Thread(target=self.summary_worker, daemon=True)
                             summary_thread.start()
                             self.summary_threads.append(summary_thread)
@@ -1442,8 +1448,9 @@ class AudioTranscriberGUI:
                             'transcript_file': transcript_file
                         })
 
-                        # 动态创建总结线程（如果未达到最大线程数）
+                        # 动态创建总结线程（使用线程锁避免竞争条件）
                         if self.active_summary_threads < self.max_summary_threads:
+                            self.summary_thread_pool.put_nowait(True)  # 标记线程槽位被占用
                             summary_thread = threading.Thread(target=self.summary_worker, daemon=True)
                             summary_thread.start()
                             self.summary_threads.append(summary_thread)
@@ -1451,7 +1458,7 @@ class AudioTranscriberGUI:
                     else:
                         # 未启用总结，直接标记总结完成
                         self.root.after(0, self.update_file_progress, audio_file, '未启用', 100, "summary")
-                
+
             except queue.Empty:
                 continue
             except Exception as e:
@@ -1521,7 +1528,7 @@ class AudioTranscriberGUI:
                 if summary_file and summary:
                     # 总结文件已存在，跳过总结步骤
                     self.root.after(0, self.update_file_progress, audio_file, '总结完成(已存在)', 100, "summary")
-                    
+
                     # 处理结果
                     if self.is_folder_mode.get():
                         self._save_batch_result(audio_file, rel_path, transcription, summary, transcript_file)
@@ -1532,40 +1539,43 @@ class AudioTranscriberGUI:
                     # 更新状态
                     status_text = f'总结中 ({os.path.basename(transcript_file) if transcript_file else ""})'
                     self.root.after(0, self.update_file_progress, audio_file, status_text, 0, "summary")
-                    
+
                     # 生成总结
                     audio_title = FileUtils.get_audio_title(audio_file)
                     summary = self.summarizer.summarize(transcription, audio_title, self.template_var.get())
-                    
+
                     # 处理结果
                     if self.is_folder_mode.get():
                         self._save_batch_result(audio_file, rel_path, transcription, summary, transcript_file)
                     else:
                         self._display_single_result(audio_file, transcription, summary, transcript_file, rel_path)
-                
-                # 从线程池中移除当前线程
+
+                # 标记任务完成，从线程池中释放槽位
                 try:
                     self.summary_thread_pool.get_nowait()
                 except queue.Empty:
                     pass
-                
-                # 减少活跃线程计数
-                self.active_summary_threads -= 1
-                
+
             except queue.Empty:
+                # 队列为空，检查是否应该退出
+                # 如果转录队列也为空且转录线程已完成，则退出
+                if self.transcription_queue.empty() and (not self.transcription_thread or not self.transcription_thread.is_alive()):
+                    # 队列为空且没有更多转录任务，线程退出
+                    break
                 continue
+
             except Exception as e:
                 self.root.after(0, self.update_file_progress, audio_file, f'错误: {str(e)}', 0, "summary")
                 print(f"总结文件 {audio_file} 时出错: {str(e)}")
-                
-                # 从线程池中移除当前线程
+
+                # 标记任务完成，从线程池中释放槽位
                 try:
                     self.summary_thread_pool.get_nowait()
                 except queue.Empty:
                     pass
-                
-                # 减少活跃线程计数
-                self.active_summary_threads -= 1
+
+        # 线程退出时减少活跃线程计数
+        self.active_summary_threads -= 1
     
     def _save_batch_result(self, audio_file, rel_path, transcription, summary, transcript_file):
         """保存批量处理结果 - 保持源文件夹结构"""
@@ -1772,8 +1782,8 @@ class AudioTranscriberGUI:
         if self.transcriber and hasattr(self.transcriber, 'reset_stop_flag'):
             self.transcriber.reset_stop_flag()
 
-        if self.summarizer and hasattr(self.summarizer, 'reset_stop_flag'):
-            self.summarizer.reset_stop_flag()
+        if self.summarizer and hasattr(self.summarizer, 'reset_stop_flags'):
+            self.summarizer.reset_stop_flags()
 
         # 更新UI状态
         self.status_var.set("已停止")
